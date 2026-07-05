@@ -89,6 +89,8 @@ export interface RestaurantSettings {
   isReservationEnabled?: boolean;
   isLoyaltyEnabled?: boolean;
   lastLineError?: string;
+  supabaseUrl?: string;
+  supabaseAnonKey?: string;
 }
 
 export interface Reservation {

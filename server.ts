@@ -2,6 +2,7 @@ import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
+import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -97,6 +98,8 @@ export interface RestaurantSettings {
   isReservationEnabled?: boolean;
   isLoyaltyEnabled?: boolean;
   lastLineError?: string;
+  supabaseUrl?: string;
+  supabaseAnonKey?: string;
 }
 
 let restaurantSettings: RestaurantSettings = {
@@ -113,7 +116,9 @@ let restaurantSettings: RestaurantSettings = {
   isClosedTemporarily: false,
   isReservationEnabled: true,
   isLoyaltyEnabled: true,
-  lastLineError: ""
+  lastLineError: "",
+  supabaseUrl: process.env.VITE_SUPABASE_URL || "",
+  supabaseAnonKey: process.env.VITE_SUPABASE_ANON_KEY || ""
 };
 
 // Initial Menu Seed Data
@@ -455,6 +460,311 @@ let reservations: Reservation[] = [
 
 let orderCounter = 1004;
 
+// --- SUPABASE PERSISTENCE & REALTIME SYNC ---
+
+// Lazy-initialized Supabase Client
+function getSupabase() {
+  const url = restaurantSettings.supabaseUrl?.trim() || process.env.VITE_SUPABASE_URL?.trim();
+  const key = restaurantSettings.supabaseAnonKey?.trim() || process.env.VITE_SUPABASE_ANON_KEY?.trim();
+  if (url && key) {
+    try {
+      return createClient(url, key);
+    } catch (e) {
+      console.error("Supabase client creation error:", e);
+    }
+  }
+  return null;
+}
+
+// Helper to sync restaurant settings to Supabase
+async function syncSettingsToSupabase() {
+  const supabase = getSupabase();
+  if (!supabase) return;
+  try {
+    const { error } = await supabase.from('restaurant_settings').upsert({
+      id: 'default',
+      store_name: restaurantSettings.storeName,
+      promptpay_number: restaurantSettings.promptPayNumber,
+      promptpay_name: restaurantSettings.promptPayName,
+      line_channel_access_token: restaurantSettings.lineChannelAccessToken || "",
+      line_user_id: restaurantSettings.lineUserId || "",
+      phone: restaurantSettings.phone || "",
+      tagline: restaurantSettings.tagline || "",
+      open_time: restaurantSettings.openTime || "09:00",
+      close_time: restaurantSettings.closeTime || "21:00",
+      closed_days: restaurantSettings.closedDays || [],
+      is_closed_temporarily: restaurantSettings.isClosedTemporarily === true,
+      is_reservation_enabled: restaurantSettings.isReservationEnabled !== false,
+      is_loyalty_enabled: restaurantSettings.isLoyaltyEnabled !== false,
+      last_line_error: restaurantSettings.lastLineError || ""
+    });
+    if (error) console.error("Supabase settings sync error:", error);
+  } catch (e) {
+    console.error("Supabase settings sync failed:", e);
+  }
+}
+
+// Helper to sync an order to Supabase
+async function syncOrderToSupabase(order: Order) {
+  const supabase = getSupabase();
+  if (!supabase) return;
+  try {
+    const { error } = await supabase.from('orders').upsert({
+      id: order.id,
+      order_number: order.orderNumber,
+      customer_name: order.customerName,
+      dine_in_type: order.dineInType,
+      table_number: order.tableNumber || "",
+      delivery_address: order.deliveryAddress || "",
+      phone: order.phone || "",
+      payment_method: order.paymentMethod || "cash",
+      payment_slip: order.paymentSlip || "",
+      items: order.items,
+      total_amount: order.totalAmount,
+      status: order.status,
+      timestamp: order.timestamp
+    });
+    if (error) console.error("Supabase order sync error:", error);
+  } catch (e) {
+    console.error("Supabase order sync failed:", e);
+  }
+}
+
+// Helper to delete an order from Supabase
+async function deleteOrderFromSupabase(id: string) {
+  const supabase = getSupabase();
+  if (!supabase) return;
+  try {
+    const { error } = await supabase.from('orders').delete().eq('id', id);
+    if (error) console.error("Supabase order deletion error:", error);
+  } catch (e) {
+    console.error("Supabase order deletion failed:", e);
+  }
+}
+
+// Helper to sync a reservation to Supabase
+async function syncReservationToSupabase(resv: Reservation) {
+  const supabase = getSupabase();
+  if (!supabase) return;
+  try {
+    const { error } = await supabase.from('reservations').upsert({
+      id: resv.id,
+      customer_name: resv.customerName,
+      phone: resv.phone,
+      date: resv.date,
+      time: resv.time,
+      party_size: resv.partySize,
+      table_preference: resv.tablePreference || "",
+      special_request: resv.specialRequest || "",
+      status: resv.status,
+      timestamp: resv.timestamp
+    });
+    if (error) console.error("Supabase reservation sync error:", error);
+  } catch (e) {
+    console.error("Supabase reservation sync failed:", e);
+  }
+}
+
+// Helper to delete a reservation from Supabase
+async function deleteReservationFromSupabase(id: string) {
+  const supabase = getSupabase();
+  if (!supabase) return;
+  try {
+    const { error } = await supabase.from('reservations').delete().eq('id', id);
+    if (error) console.error("Supabase reservation deletion error:", error);
+  } catch (e) {
+    console.error("Supabase reservation deletion failed:", e);
+  }
+}
+
+// Helper to sync a menu item to Supabase
+async function syncMenuItemToSupabase(item: MenuItem) {
+  const supabase = getSupabase();
+  if (!supabase) return;
+  try {
+    const { error } = await supabase.from('menu_items').upsert({
+      id: item.id,
+      name_th: item.nameTh,
+      name_en: item.nameEn,
+      description_th: item.descriptionTh,
+      description_en: item.descriptionEn,
+      price: item.price,
+      category: item.category,
+      image: item.image,
+      is_popular: item.isPopular,
+      prep_time: item.prepTime,
+      ingredients: item.ingredients,
+      in_stock: item.inStock,
+      option_groups: item.optionGroups || []
+    });
+    if (error) console.error("Supabase menu item sync error:", error);
+  } catch (e) {
+    console.error("Supabase menu item sync failed:", e);
+  }
+}
+
+// Helper to delete a menu item from Supabase
+async function deleteMenuItemFromSupabase(id: string) {
+  const supabase = getSupabase();
+  if (!supabase) return;
+  try {
+    const { error } = await supabase.from('menu_items').delete().eq('id', id);
+    if (error) console.error("Supabase menu item deletion error:", error);
+  } catch (e) {
+    console.error("Supabase menu item deletion failed:", e);
+  }
+}
+
+// Load and initialize data from Supabase
+async function initializeSupabaseData() {
+  const supabase = getSupabase();
+  if (!supabase) {
+    console.log("Supabase is not configured. Running in local memory fallback mode.");
+    return;
+  }
+  
+  console.log("Supabase configured! Loading and seeding data...");
+  try {
+    // 1. Load Settings
+    const { data: settingsData, error: settingsErr } = await supabase
+      .from('restaurant_settings')
+      .select('*')
+      .eq('id', 'default')
+      .maybeSingle();
+      
+    if (settingsErr) {
+      console.error("Error reading settings from Supabase:", settingsErr);
+    } else if (settingsData) {
+      restaurantSettings = {
+        storeName: settingsData.store_name,
+        promptPayNumber: settingsData.promptpay_number,
+        promptPayName: settingsData.promptpay_name,
+        lineChannelAccessToken: settingsData.line_channel_access_token,
+        lineUserId: settingsData.line_user_id,
+        phone: settingsData.phone,
+        tagline: settingsData.tagline,
+        openTime: settingsData.open_time,
+        closeTime: settingsData.close_time,
+        closedDays: Array.isArray(settingsData.closed_days) ? settingsData.closed_days : [],
+        isClosedTemporarily: settingsData.is_closed_temporarily,
+        isReservationEnabled: settingsData.is_reservation_enabled,
+        isLoyaltyEnabled: settingsData.is_loyalty_enabled,
+        lastLineError: settingsData.last_line_error,
+        supabaseUrl: restaurantSettings.supabaseUrl,
+        supabaseAnonKey: restaurantSettings.supabaseAnonKey
+      };
+      console.log("Settings loaded from Supabase.");
+    } else {
+      console.log("No settings found in Supabase. Seeding default settings...");
+      await syncSettingsToSupabase();
+    }
+
+    // 2. Load Menu Items
+    const { data: menuData, error: menuErr } = await supabase
+      .from('menu_items')
+      .select('*');
+      
+    if (menuErr) {
+      console.error("Error loading menu from Supabase:", menuErr);
+    } else if (menuData && menuData.length > 0) {
+      menuItems = menuData.map(item => ({
+        id: item.id,
+        nameTh: item.name_th,
+        nameEn: item.name_en,
+        descriptionTh: item.description_th || "",
+        descriptionEn: item.description_en || "",
+        price: Number(item.price),
+        category: item.category,
+        image: item.image,
+        isPopular: item.is_popular,
+        prepTime: item.prep_time,
+        ingredients: item.ingredients || [],
+        inStock: item.in_stock,
+        optionGroups: item.option_groups || []
+      }));
+      console.log(`Loaded ${menuItems.length} menu items from Supabase.`);
+    } else {
+      console.log("No menu items found in Supabase. Seeding default menu items...");
+      for (const item of menuItems) {
+        await syncMenuItemToSupabase(item);
+      }
+    }
+
+    // 3. Load Orders
+    const { data: ordersData, error: ordersErr } = await supabase
+      .from('orders')
+      .select('*');
+      
+    if (ordersErr) {
+      console.error("Error loading orders from Supabase:", ordersErr);
+    } else if (ordersData && ordersData.length > 0) {
+      orders = ordersData.map(order => ({
+        id: order.id,
+        orderNumber: order.order_number,
+        customerName: order.customer_name,
+        dineInType: order.dine_in_type,
+        tableNumber: order.table_number,
+        deliveryAddress: order.delivery_address,
+        phone: order.phone,
+        paymentMethod: order.payment_method,
+        paymentSlip: order.payment_slip,
+        items: order.items,
+        totalAmount: Number(order.total_amount),
+        status: order.status,
+        timestamp: order.timestamp
+      }));
+      
+      const maxOrderNum = ordersData.reduce((max, o) => {
+        const num = Number(o.order_number);
+        return isNaN(num) ? max : Math.max(max, num);
+      }, 1003);
+      orderCounter = maxOrderNum + 1;
+      console.log(`Loaded ${orders.length} orders from Supabase. Next OrderCounter: ${orderCounter}`);
+    } else {
+      console.log("No orders found in Supabase. Seeding default orders...");
+      for (const order of orders) {
+        await syncOrderToSupabase(order);
+      }
+    }
+
+    // 4. Load Reservations
+    const { data: resData, error: resErr } = await supabase
+      .from('reservations')
+      .select('*');
+      
+    if (resErr) {
+      console.error("Error loading reservations from Supabase:", resErr);
+    } else if (resData && resData.length > 0) {
+      reservations = resData.map(resv => ({
+        id: resv.id,
+        customerName: resv.customer_name,
+        phone: resv.phone,
+        date: resv.date,
+        time: resv.time,
+        partySize: Number(resv.party_size),
+        tablePreference: resv.table_preference,
+        specialRequest: resv.special_request,
+        status: resv.status,
+        timestamp: resv.timestamp
+      }));
+      console.log(`Loaded ${reservations.length} reservations from Supabase.`);
+    } else {
+      console.log("No reservations found in Supabase. Seeding default reservations...");
+      for (const resv of reservations) {
+        await syncReservationToSupabase(resv);
+      }
+    }
+
+  } catch (e) {
+    console.error("Exception in Supabase loading:", e);
+  }
+}
+
+// Initialize Supabase data immediately on start
+initializeSupabaseData().catch(e => console.error("Error initializing Supabase data on start:", e));
+
+// --- END SUPABASE PERSISTENCE ---
+
 // Lazy-loaded Gemini Client Helper
 let aiClient: GoogleGenAI | null = null;
 function getGeminiAI(): GoogleGenAI | null {
@@ -564,6 +874,7 @@ app.post("/api/menu", (req, res) => {
   };
 
   menuItems.push(newItem);
+  syncMenuItemToSupabase(newItem).catch(e => console.error(e));
   res.status(201).json(newItem);
 });
 
@@ -581,6 +892,7 @@ app.put("/api/menu/:id", (req, res) => {
     id: menuItems[index].id // keep ID immutable
   };
 
+  syncMenuItemToSupabase(menuItems[index]).catch(e => console.error(e));
   res.json(menuItems[index]);
 });
 
@@ -593,6 +905,7 @@ app.delete("/api/menu/:id", (req, res) => {
   }
   
   menuItems.splice(index, 1);
+  deleteMenuItemFromSupabase(id).catch(e => console.error(e));
   res.json({ success: true, deletedId: id });
 });
 
@@ -604,6 +917,7 @@ app.post("/api/menu/:id/toggle-stock", (req, res) => {
     return res.status(404).json({ error: "Menu item not found" });
   }
   item.inStock = !item.inStock;
+  syncMenuItemToSupabase(item).catch(e => console.error(e));
   res.json({ id: item.id, inStock: item.inStock });
 });
 
@@ -995,6 +1309,9 @@ app.post("/api/orders", (req, res) => {
   orders.unshift(newOrder); // Add to beginning of array so it appears at top
   orderCounter++;
 
+  // Sync to Supabase
+  syncOrderToSupabase(newOrder).catch(e => console.error(e));
+
   // Send LINE notification in background without blocking response
   sendLineNotification(newOrder).catch((err) => {
     console.error("Error sending LINE notification asynchronously:", err);
@@ -1011,6 +1328,7 @@ app.delete("/api/orders/:id", (req, res) => {
     return res.status(404).json({ error: "Order not found" });
   }
   orders.splice(index, 1);
+  deleteOrderFromSupabase(id).catch(e => console.error(e));
   res.json({ success: true, deletedId: id });
 });
 
@@ -1033,6 +1351,7 @@ app.post("/api/orders/:id/update-item-price", (req, res) => {
   // Recalculate totalAmount
   order.totalAmount = order.items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
 
+  syncOrderToSupabase(order).catch(e => console.error(e));
   res.json(order);
 });
 
@@ -1091,6 +1410,7 @@ app.put("/api/orders/:id/items", (req, res) => {
   order.items = processedItems;
   order.totalAmount = calculatedTotal;
 
+  syncOrderToSupabase(order).catch(e => console.error(e));
   res.json(order);
 });
 
@@ -1109,6 +1429,7 @@ app.post("/api/orders/:id/status", (req, res) => {
   }
 
   order.status = status;
+  syncOrderToSupabase(order).catch(e => console.error(e));
   res.json(order);
 });
 
@@ -1193,12 +1514,17 @@ app.post("/api/settings", (req, res) => {
     closedDays,
     isClosedTemporarily,
     isReservationEnabled,
-    isLoyaltyEnabled
+    isLoyaltyEnabled,
+    supabaseUrl,
+    supabaseAnonKey
   } = req.body;
   if (!storeName || !promptPayNumber || !promptPayName) {
     return res.status(400).json({ error: "Missing required settings fields" });
   }
   const tokenChanged = lineChannelAccessToken !== restaurantSettings.lineChannelAccessToken;
+  const oldUrl = restaurantSettings.supabaseUrl;
+  const oldKey = restaurantSettings.supabaseAnonKey;
+
   restaurantSettings = { 
     storeName, 
     promptPayNumber, 
@@ -1213,8 +1539,22 @@ app.post("/api/settings", (req, res) => {
     isClosedTemporarily: isClosedTemporarily === true,
     isReservationEnabled: isReservationEnabled !== false,
     isLoyaltyEnabled: isLoyaltyEnabled !== false,
-    lastLineError: tokenChanged ? "" : (restaurantSettings.lastLineError || "")
+    lastLineError: tokenChanged ? "" : (restaurantSettings.lastLineError || ""),
+    supabaseUrl: supabaseUrl || "",
+    supabaseAnonKey: supabaseAnonKey || ""
   };
+
+  // Sync to Supabase
+  syncSettingsToSupabase().catch(e => console.error(e));
+
+  // If credentials changed, trigger reload
+  if (supabaseUrl !== oldUrl || supabaseAnonKey !== oldKey) {
+    console.log("Supabase credentials changed, re-initializing data...");
+    setTimeout(() => {
+      initializeSupabaseData().catch(e => console.error("Error re-initializing Supabase data:", e));
+    }, 100);
+  }
+
   res.json(restaurantSettings);
 });
 
@@ -1244,6 +1584,7 @@ app.post("/api/reservations", (req, res) => {
   };
 
   reservations.unshift(newRes);
+  syncReservationToSupabase(newRes).catch(e => console.error(e));
   res.status(201).json(newRes);
 });
 
@@ -1261,6 +1602,7 @@ app.post("/api/reservations/:id/status", (req, res) => {
   }
 
   reservation.status = status;
+  syncReservationToSupabase(reservation).catch(e => console.error(e));
   res.json(reservation);
 });
 
@@ -1272,6 +1614,7 @@ app.delete("/api/reservations/:id", (req, res) => {
     return res.status(404).json({ error: "Reservation not found" });
   }
   reservations.splice(index, 1);
+  deleteReservationFromSupabase(id).catch(e => console.error(e));
   res.json({ success: true, id });
 });
 

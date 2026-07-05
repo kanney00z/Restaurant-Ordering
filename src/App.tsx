@@ -44,6 +44,7 @@ import {
   Users
 } from 'lucide-react';
 import { Category, MenuItem, Order, CartItem, Customizations, AnalyticsData, RestaurantSettings, OptionChoice, OptionGroup, Reservation } from './types';
+import { createClient } from '@supabase/supabase-js';
 import DeliveryMap from './components/DeliveryMap';
 
 const isNoodleDish = (item: MenuItem) => {
@@ -175,6 +176,8 @@ export default function App() {
   const [editIsClosedTemporarily, setEditIsClosedTemporarily] = useState(false);
   const [editIsReservationEnabled, setEditIsReservationEnabled] = useState(true);
   const [editIsLoyaltyEnabled, setEditIsLoyaltyEnabled] = useState(true);
+  const [editSupabaseUrl, setEditSupabaseUrl] = useState('');
+  const [editSupabaseAnonKey, setEditSupabaseAnonKey] = useState('');
   const [settingsSuccessMsg, setSettingsSuccessMsg] = useState('');
 
   // 5 Feature Upgrades states
@@ -507,6 +510,64 @@ export default function App() {
     return () => clearInterval(timer);
   }, []);
 
+  // Supabase Real-Time Client Subscription
+  useEffect(() => {
+    const url = settings.supabaseUrl?.trim() || (import.meta as any).env.VITE_SUPABASE_URL?.trim();
+    const key = settings.supabaseAnonKey?.trim() || (import.meta as any).env.VITE_SUPABASE_ANON_KEY?.trim();
+    if (!url || !key || url === 'YOUR_SUPABASE_URL_HERE' || key === 'YOUR_SUPABASE_ANON_KEY_HERE') return;
+
+    try {
+      console.log('Connecting to Supabase Real-time:', url);
+      const supabase = createClient(url, key);
+      
+      // Subscribe to orders real-time channel
+      const ordersChannel = supabase
+        .channel('realtime_orders')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
+          console.log('Real-Time Order Update received:', payload);
+          fetchOrders();
+          fetchAnalytics();
+        })
+        .subscribe();
+
+      // Subscribe to reservations real-time channel
+      const reservationsChannel = supabase
+        .channel('realtime_reservations')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'reservations' }, (payload) => {
+          console.log('Real-Time Reservation Update received:', payload);
+          fetchReservations();
+        })
+        .subscribe();
+
+      // Subscribe to settings real-time channel
+      const settingsChannel = supabase
+        .channel('realtime_settings')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'restaurant_settings' }, (payload) => {
+          console.log('Real-Time Settings Update received:', payload);
+          fetchSettings();
+        })
+        .subscribe();
+
+      // Subscribe to menu real-time channel
+      const menuChannel = supabase
+        .channel('realtime_menu')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'menu_items' }, (payload) => {
+          console.log('Real-Time Menu Update received:', payload);
+          fetchMenu();
+        })
+        .subscribe();
+
+      return () => {
+        supabase.removeChannel(ordersChannel);
+        supabase.removeChannel(reservationsChannel);
+        supabase.removeChannel(settingsChannel);
+        supabase.removeChannel(menuChannel);
+      };
+    } catch (e) {
+      console.error('Failed to configure client-side Supabase real-time:', e);
+    }
+  }, [settings.supabaseUrl, settings.supabaseAnonKey]);
+
   // Play chime when order count increases
   useEffect(() => {
     if (orders.length > 0) {
@@ -605,6 +666,8 @@ export default function App() {
         setEditIsClosedTemporarily(data.isClosedTemporarily || false);
         setEditIsReservationEnabled(data.isReservationEnabled !== false);
         setEditIsLoyaltyEnabled(data.isLoyaltyEnabled !== false);
+        setEditSupabaseUrl(data.supabaseUrl || '');
+        setEditSupabaseAnonKey(data.supabaseAnonKey || '');
 
         // Dynamic table greeting message
         const params = new URLSearchParams(window.location.search);
@@ -638,7 +701,9 @@ export default function App() {
           closedDays: editClosedDays,
           isClosedTemporarily: editIsClosedTemporarily,
           isReservationEnabled: editIsReservationEnabled,
-          isLoyaltyEnabled: editIsLoyaltyEnabled
+          isLoyaltyEnabled: editIsLoyaltyEnabled,
+          supabaseUrl: editSupabaseUrl.trim(),
+          supabaseAnonKey: editSupabaseAnonKey.trim()
         })
       });
       if (res.ok) {
@@ -3495,6 +3560,212 @@ export default function App() {
                           className="w-full px-3 py-1.5 bg-slate-950 border border-white/5 focus:border-orange-500 rounded-lg text-xs text-slate-200 focus:outline-none font-mono"
                         />
                         <p className="text-[9px] text-slate-500 mt-0.5 font-sans">เว้นว่างไว้หากต้องการส่งแบบ Broadcast ไปยังผู้ติดตามบอททุกคน</p>
+                      </div>
+                    </div>
+
+                    {/* Supabase Database Settings */}
+                    <div className="border-t border-white/5 pt-3 mt-3 space-y-3">
+                      <div>
+                        <h5 className="text-[11px] font-bold text-[#3ECF8E] uppercase tracking-wide flex items-center gap-1">
+                          <span className="w-2 h-2 rounded-full bg-[#3ECF8E] animate-pulse"></span>
+                          <span>ตั้งค่า Supabase (Real-Time Cloud Database)</span>
+                        </h5>
+                        <p className="text-[9px] text-slate-400 font-sans">ซิงก์ข้อมูลออเดอร์ เมนู และการจองโต๊ะผ่าน Cloud Database ของ Supabase แบบเรียลไทม์ทันทีเมื่อมีการเปลี่ยนแปลงในระบบ</p>
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] text-slate-400 mb-1 font-sans">Supabase Project URL</label>
+                        <input
+                          type="text"
+                          placeholder="https://your-project.supabase.co"
+                          value={editSupabaseUrl}
+                          onChange={(e) => setEditSupabaseUrl(e.target.value)}
+                          className="w-full px-3 py-1.5 bg-slate-950 border border-white/5 focus:border-[#3ECF8E] rounded-lg text-xs text-slate-200 focus:outline-none font-mono"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] text-slate-400 mb-1 font-sans">Supabase Anon Public API Key</label>
+                        <textarea
+                          rows={2}
+                          placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                          value={editSupabaseAnonKey}
+                          onChange={(e) => setEditSupabaseAnonKey(e.target.value)}
+                          className="w-full px-3 py-1.5 bg-slate-950 border border-white/5 focus:border-[#3ECF8E] rounded-lg text-[10px] text-slate-200 focus:outline-none font-mono break-all"
+                        />
+                      </div>
+
+                      <div className="bg-slate-950 p-2.5 rounded-lg border border-[#3ECF8E]/20 space-y-2">
+                        <span className="block text-[9px] font-bold text-[#3ECF8E] font-sans">⚡ คู่มือสร้างตาราง (SQL Script):</span>
+                        <p className="text-[8px] text-slate-400 font-sans leading-relaxed">
+                          กรุณาคัดลอกโค้ด SQL ด้านล่างนี้ ไปรันในเมนู <strong>SQL Editor</strong> บนคอนโซล Supabase ของท่านเพื่อตั้งตารางที่จำเป็น:
+                        </p>
+                        <textarea
+                          readOnly
+                          rows={6}
+                          className="w-full p-2 bg-slate-900 border border-white/5 rounded text-[8px] font-mono text-slate-300 focus:outline-none"
+                          value={`-- 1. Create restaurant_settings table
+create table if not exists restaurant_settings (
+  id text primary key,
+  store_name text,
+  promptpay_number text,
+  promptpay_name text,
+  line_channel_access_token text,
+  line_user_id text,
+  phone text,
+  tagline text,
+  open_time text,
+  close_time text,
+  closed_days jsonb,
+  is_closed_temporarily boolean,
+  is_reservation_enabled boolean,
+  is_loyalty_enabled boolean,
+  last_line_error text,
+  updated_at timestamp with time zone default now()
+);
+
+-- 2. Create menu_items table
+create table if not exists menu_items (
+  id text primary key,
+  name_th text,
+  name_en text,
+  description_th text,
+  description_en text,
+  price numeric,
+  category text,
+  image text,
+  is_popular boolean,
+  prep_time integer,
+  ingredients text[],
+  in_stock boolean,
+  option_groups jsonb,
+  updated_at timestamp with time zone default now()
+);
+
+-- 3. Create orders table
+create table if not exists orders (
+  id text primary key,
+  order_number text,
+  customer_name text,
+  dine_in_type text,
+  table_number text,
+  delivery_address text,
+  phone text,
+  payment_method text,
+  payment_slip text,
+  items jsonb,
+  total_amount numeric,
+  status text,
+  timestamp text,
+  updated_at timestamp with time zone default now()
+);
+
+-- 4. Create reservations table
+create table if not exists reservations (
+  id text primary key,
+  customer_name text,
+  phone text,
+  date text,
+  time text,
+  party_size integer,
+  table_preference text,
+  special_request text,
+  status text,
+  timestamp text,
+  updated_at timestamp with time zone default now()
+);
+
+-- Enable Realtime for these tables
+alter publication supabase_realtime add table orders;
+alter publication supabase_realtime add table reservations;
+alter publication supabase_realtime add table restaurant_settings;
+alter publication supabase_realtime add table menu_items;`}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(`-- 1. Create restaurant_settings table
+create table if not exists restaurant_settings (
+  id text primary key,
+  store_name text,
+  promptpay_number text,
+  promptpay_name text,
+  line_channel_access_token text,
+  line_user_id text,
+  phone text,
+  tagline text,
+  open_time text,
+  close_time text,
+  closed_days jsonb,
+  is_closed_temporarily boolean,
+  is_reservation_enabled boolean,
+  is_loyalty_enabled boolean,
+  last_line_error text,
+  updated_at timestamp with time zone default now()
+);
+
+-- 2. Create menu_items table
+create table if not exists menu_items (
+  id text primary key,
+  name_th text,
+  name_en text,
+  description_th text,
+  description_en text,
+  price numeric,
+  category text,
+  image text,
+  is_popular boolean,
+  prep_time integer,
+  ingredients text[],
+  in_stock boolean,
+  option_groups jsonb,
+  updated_at timestamp with time zone default now()
+);
+
+-- 3. Create orders table
+create table if not exists orders (
+  id text primary key,
+  order_number text,
+  customer_name text,
+  dine_in_type text,
+  table_number text,
+  delivery_address text,
+  phone text,
+  payment_method text,
+  payment_slip text,
+  items jsonb,
+  total_amount numeric,
+  status text,
+  timestamp text,
+  updated_at timestamp with time zone default now()
+);
+
+-- 4. Create reservations table
+create table if not exists reservations (
+  id text primary key,
+  customer_name text,
+  phone text,
+  date text,
+  time text,
+  party_size integer,
+  table_preference text,
+  special_request text,
+  status text,
+  timestamp text,
+  updated_at timestamp with time zone default now()
+);
+
+-- Enable Realtime for these tables
+alter publication supabase_realtime add table orders;
+alter publication supabase_realtime add table reservations;
+alter publication supabase_realtime add table restaurant_settings;
+alter publication supabase_realtime add table menu_items;`);
+                            alert('คัดลอก SQL Script เรียบร้อยแล้ว!');
+                          }}
+                          className="w-full bg-slate-900 hover:bg-slate-850 text-[#3ECF8E] hover:text-white border border-[#3ECF8E]/20 text-[9px] font-bold py-1 rounded transition-colors"
+                        >
+                          📋 คัดลอกโค้ด SQL ทั้งหมด
+                        </button>
                       </div>
                     </div>
 
