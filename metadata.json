@@ -1,0 +1,6 @@
+{
+  "name": "Restaurant Ordering & Admin Dashboard",
+  "description": "A high-fidelity full-stack restaurant ordering application featuring interactive customer menu ordering, custom pairings, real-time admin order queues, sales analytics, and an AI Culinary Sommelier powered by Gemini.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
