@@ -556,18 +556,20 @@ async function syncOrderToSupabase(order: Order) {
   try {
     const { error } = await supabase.from('orders').upsert({
       id: order.id,
-      order_number: order.orderNumber,
       customer_name: order.customerName,
-      dine_in_type: order.dineInType,
-      table_number: order.tableNumber || "",
-      delivery_address: order.deliveryAddress || "",
-      phone: order.phone || "",
+      address: order.deliveryAddress || "",
       payment_method: order.paymentMethod || "cash",
-      payment_slip: order.paymentSlip || "",
       items: order.items,
-      total_amount: order.totalAmount,
+      total: order.totalAmount,
       status: order.status,
-      timestamp: order.timestamp
+      date: order.timestamp,
+      note: JSON.stringify({
+        orderNumber: order.orderNumber,
+        dineInType: order.dineInType,
+        tableNumber: order.tableNumber || "",
+        phone: order.phone || "",
+        paymentSlip: order.paymentSlip || ""
+      })
     });
     if (error) console.error("Supabase order sync error:", error);
   } catch (e) {
@@ -641,18 +643,19 @@ async function syncMenuItemToSupabase(item: MenuItem) {
   try {
     const { error } = await supabase.from('menu_items').upsert({
       id: item.id,
-      name_th: item.nameTh,
-      name_en: item.nameEn,
-      description_th: item.descriptionTh,
-      description_en: item.descriptionEn,
+      name: JSON.stringify({ th: item.nameTh, en: item.nameEn }),
+      description: JSON.stringify({
+        th: item.descriptionTh || "",
+        en: item.descriptionEn || "",
+        isPopular: item.isPopular === true,
+        prepTime: item.prepTime || 15,
+        ingredients: item.ingredients || []
+      }),
       price: item.price,
       category: item.category,
       image: item.image,
-      is_popular: item.isPopular,
-      prep_time: item.prepTime,
-      ingredients: item.ingredients,
-      in_stock: item.inStock,
-      option_groups: item.optionGroups || []
+      available: item.inStock,
+      options: item.optionGroups || []
     });
     if (error) console.error("Supabase menu item sync error:", error);
   } catch (e) {
@@ -766,21 +769,55 @@ async function initializeSupabaseData() {
     } else if (menuData && menuData.length > 0) {
       menuItems = menuData
         .filter(item => !deletedMenuItemIds.includes(item.id))
-        .map(item => ({
-          id: item.id,
-          nameTh: item.name_th,
-          nameEn: item.name_en,
-          descriptionTh: item.description_th || "",
-          descriptionEn: item.description_en || "",
-          price: Number(item.price),
-          category: item.category,
-          image: item.image,
-          isPopular: item.is_popular,
-          prepTime: item.prep_time,
-          ingredients: item.ingredients || [],
-          inStock: item.in_stock,
-          optionGroups: item.option_groups || []
-        }));
+        .map(item => {
+          let nameTh = "";
+          let nameEn = "";
+          try {
+            if (item.name) {
+              const parsedName = JSON.parse(item.name);
+              nameTh = parsedName.th || item.name;
+              nameEn = parsedName.en || item.name;
+            }
+          } catch (e) {
+            nameTh = item.name || "";
+            nameEn = item.name || "";
+          }
+
+          let descriptionTh = "";
+          let descriptionEn = "";
+          let isPopular = false;
+          let prepTime = 15;
+          let ingredients = [];
+          try {
+            if (item.description) {
+              const parsedDesc = JSON.parse(item.description);
+              descriptionTh = parsedDesc.th || item.description;
+              descriptionEn = parsedDesc.en || item.description;
+              isPopular = parsedDesc.isPopular === true;
+              prepTime = parsedDesc.prepTime || 15;
+              ingredients = parsedDesc.ingredients || [];
+            }
+          } catch (e) {
+            descriptionTh = item.description || "";
+            descriptionEn = item.description || "";
+          }
+
+          return {
+            id: item.id,
+            nameTh,
+            nameEn,
+            descriptionTh,
+            descriptionEn,
+            price: Number(item.price || 0),
+            category: item.category || "",
+            image: item.image || "",
+            isPopular,
+            prepTime,
+            ingredients,
+            inStock: item.available !== false,
+            optionGroups: item.options || []
+          };
+        });
       console.log(`Loaded ${menuItems.length} menu items from Supabase.`);
     } else {
       console.log("No menu items found in Supabase. Seeding default menu items...");
@@ -799,24 +836,45 @@ async function initializeSupabaseData() {
     } else if (ordersData && ordersData.length > 0) {
       orders = ordersData
         .filter(order => !deletedOrderIds.includes(order.id))
-        .map(order => ({
-          id: order.id,
-          orderNumber: order.order_number,
-          customerName: order.customer_name,
-          dineInType: order.dine_in_type,
-          tableNumber: order.table_number,
-          deliveryAddress: order.delivery_address,
-          phone: order.phone,
-          paymentMethod: order.payment_method,
-          paymentSlip: order.payment_slip,
-          items: order.items,
-          totalAmount: Number(order.total_amount),
-          status: order.status,
-          timestamp: order.timestamp
-        }));
+        .map(order => {
+          let orderNumber = order.id.replace("ORD-", "");
+          let dineInType: 'dine-in' | 'delivery' = "dine-in";
+          let tableNumber = "";
+          let phone = "";
+          let paymentSlip = "";
+          
+          try {
+            if (order.note) {
+              const parsedNote = JSON.parse(order.note);
+              orderNumber = parsedNote.orderNumber || orderNumber;
+              dineInType = parsedNote.dineInType || dineInType;
+              tableNumber = parsedNote.tableNumber || tableNumber;
+              phone = parsedNote.phone || phone;
+              paymentSlip = parsedNote.paymentSlip || paymentSlip;
+            }
+          } catch (e) {
+            // If parsing fails, it's a legacy plain-text note
+          }
+
+          return {
+            id: order.id,
+            orderNumber,
+            customerName: order.customer_name || "",
+            dineInType,
+            tableNumber,
+            deliveryAddress: order.address || "",
+            phone,
+            paymentMethod: order.payment_method || "cash",
+            paymentSlip,
+            items: order.items || [],
+            totalAmount: Number(order.total || 0),
+            status: order.status || "pending",
+            timestamp: order.date || new Date().toISOString()
+          };
+        });
       
-      const maxOrderNum = ordersData.reduce((max, o) => {
-        const num = Number(o.order_number);
+      const maxOrderNum = orders.reduce((max, o) => {
+        const num = Number(o.orderNumber);
         return isNaN(num) ? max : Math.max(max, num);
       }, 1003);
       orderCounter = maxOrderNum + 1;
@@ -964,21 +1022,55 @@ async function ensureMenuItemsLoaded() {
     if (!menuErr && menuData) {
       menuItems = menuData
         .filter(item => !deletedMenuItemIds.includes(item.id))
-        .map(item => ({
-          id: item.id,
-          nameTh: item.name_th,
-          nameEn: item.name_en,
-          descriptionTh: item.description_th || "",
-          descriptionEn: item.description_en || "",
-          price: Number(item.price),
-          category: item.category,
-          image: item.image,
-          isPopular: item.is_popular,
-          prepTime: item.prep_time,
-          ingredients: item.ingredients || [],
-          inStock: item.in_stock,
-          optionGroups: item.option_groups || []
-        }));
+        .map(item => {
+          let nameTh = "";
+          let nameEn = "";
+          try {
+            if (item.name) {
+              const parsedName = JSON.parse(item.name);
+              nameTh = parsedName.th || item.name;
+              nameEn = parsedName.en || item.name;
+            }
+          } catch (e) {
+            nameTh = item.name || "";
+            nameEn = item.name || "";
+          }
+
+          let descriptionTh = "";
+          let descriptionEn = "";
+          let isPopular = false;
+          let prepTime = 15;
+          let ingredients = [];
+          try {
+            if (item.description) {
+              const parsedDesc = JSON.parse(item.description);
+              descriptionTh = parsedDesc.th || item.description;
+              descriptionEn = parsedDesc.en || item.description;
+              isPopular = parsedDesc.isPopular === true;
+              prepTime = parsedDesc.prepTime || 15;
+              ingredients = parsedDesc.ingredients || [];
+            }
+          } catch (e) {
+            descriptionTh = item.description || "";
+            descriptionEn = item.description || "";
+          }
+
+          return {
+            id: item.id,
+            nameTh,
+            nameEn,
+            descriptionTh,
+            descriptionEn,
+            price: Number(item.price || 0),
+            category: item.category || "",
+            image: item.image || "",
+            isPopular,
+            prepTime,
+            ingredients,
+            inStock: item.available !== false,
+            optionGroups: item.options || []
+          };
+        });
     }
   } catch (e) {
     console.error("Error dynamically loading menu items:", e);
@@ -996,24 +1088,45 @@ async function ensureOrdersLoaded() {
     if (!ordersErr && ordersData) {
       orders = ordersData
         .filter(order => !deletedOrderIds.includes(order.id))
-        .map(order => ({
-          id: order.id,
-          orderNumber: order.order_number,
-          customerName: order.customer_name,
-          dineInType: order.dine_in_type,
-          tableNumber: order.table_number,
-          deliveryAddress: order.delivery_address,
-          phone: order.phone,
-          paymentMethod: order.payment_method,
-          paymentSlip: order.payment_slip,
-          items: order.items,
-          totalAmount: Number(order.total_amount),
-          status: order.status,
-          timestamp: order.timestamp
-        }));
+        .map(order => {
+          let orderNumber = order.id.replace("ORD-", "");
+          let dineInType: 'dine-in' | 'delivery' = "dine-in";
+          let tableNumber = "";
+          let phone = "";
+          let paymentSlip = "";
+          
+          try {
+            if (order.note) {
+              const parsedNote = JSON.parse(order.note);
+              orderNumber = parsedNote.orderNumber || orderNumber;
+              dineInType = parsedNote.dineInType || dineInType;
+              tableNumber = parsedNote.tableNumber || tableNumber;
+              phone = parsedNote.phone || phone;
+              paymentSlip = parsedNote.paymentSlip || paymentSlip;
+            }
+          } catch (e) {
+            // If parsing fails, it's a legacy plain-text note
+          }
+
+          return {
+            id: order.id,
+            orderNumber,
+            customerName: order.customer_name || "",
+            dineInType,
+            tableNumber,
+            deliveryAddress: order.address || "",
+            phone,
+            paymentMethod: order.payment_method || "cash",
+            paymentSlip,
+            items: order.items || [],
+            totalAmount: Number(order.total || 0),
+            status: order.status || "pending",
+            timestamp: order.date || new Date().toISOString()
+          };
+        });
       
-      const maxOrderNum = ordersData.reduce((max, o) => {
-        const num = Number(o.order_number);
+      const maxOrderNum = orders.reduce((max, o) => {
+        const num = Number(o.orderNumber);
         return isNaN(num) ? max : Math.max(max, num);
       }, 1003);
       orderCounter = maxOrderNum + 1;
