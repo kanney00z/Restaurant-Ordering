@@ -1033,11 +1033,13 @@ app.delete("/api/menu/:id", async (req, res) => {
   const { id } = req.params;
   const index = menuItems.findIndex(item => item.id === id);
   if (index === -1) {
-    return res.status(404).json({ error: "Menu item not found" });
+    // Attempt deletion from Supabase to be safe and idempotent, returning success instead of 404
+    await deleteMenuItemFromSupabase(id).catch(e => console.error(e));
+    return res.json({ success: true, deletedId: id, note: "Menu item not found in memory but delete attempted on Supabase" });
   }
   
   menuItems.splice(index, 1);
-  deleteMenuItemFromSupabase(id).catch(e => console.error(e));
+  await deleteMenuItemFromSupabase(id).catch(e => console.error(e));
   res.json({ success: true, deletedId: id });
 });
 
@@ -1462,10 +1464,12 @@ app.delete("/api/orders/:id", async (req, res) => {
   const { id } = req.params;
   const index = orders.findIndex(o => o.id === id);
   if (index === -1) {
-    return res.status(404).json({ error: "Order not found" });
+    // Attempt deletion from Supabase to be safe and idempotent, returning success instead of 404
+    await deleteOrderFromSupabase(id).catch(e => console.error(e));
+    return res.json({ success: true, deletedId: id, note: "Order not found in memory but delete attempted on Supabase" });
   }
   orders.splice(index, 1);
-  deleteOrderFromSupabase(id).catch(e => console.error(e));
+  await deleteOrderFromSupabase(id).catch(e => console.error(e));
   res.json({ success: true, deletedId: id });
 });
 
@@ -1760,10 +1764,12 @@ app.delete("/api/reservations/:id", async (req, res) => {
   const { id } = req.params;
   const index = reservations.findIndex(r => r.id === id);
   if (index === -1) {
-    return res.status(404).json({ error: "Reservation not found" });
+    // Attempt deletion from Supabase to be safe and idempotent, returning success instead of 404
+    await deleteReservationFromSupabase(id).catch(e => console.error(e));
+    return res.json({ success: true, id, note: "Reservation not found in memory but delete attempted on Supabase" });
   }
   reservations.splice(index, 1);
-  deleteReservationFromSupabase(id).catch(e => console.error(e));
+  await deleteReservationFromSupabase(id).catch(e => console.error(e));
   res.json({ success: true, id });
 });
 
