@@ -3,6 +3,7 @@ import path from "path";
 import { GoogleGenAI } from "@google/genai";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
+import fs from "fs";
 
 dotenv.config();
 
@@ -12,6 +13,19 @@ const PORT = 3000;
 // Middleware
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// Dynamic Supabase headers extraction middleware
+app.use((req, res, next) => {
+  const url = req.headers['x-supabase-url'];
+  const key = req.headers['x-supabase-key'];
+  if (typeof url === 'string' && url.trim()) {
+    restaurantSettings.supabaseUrl = url.trim();
+  }
+  if (typeof key === 'string' && key.trim()) {
+    restaurantSettings.supabaseAnonKey = key.trim();
+  }
+  next();
+});
 
 // In-Memory Database State (resets on server restart, but fully synchronized during session)
 export interface Category {
@@ -101,7 +115,31 @@ export interface RestaurantSettings {
   supabaseAnonKey?: string;
 }
 
-let restaurantSettings: RestaurantSettings = {
+const DATA_DIR = process.env.VERCEL ? '/tmp' : process.cwd();
+
+function saveLocalFile(filename: string, data: any) {
+  try {
+    const filePath = path.join(DATA_DIR, filename);
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
+  } catch (e) {
+    console.error(`Error saving local file ${filename}:`, e);
+  }
+}
+
+function loadLocalFile(filename: string, defaultValue: any) {
+  try {
+    const filePath = path.join(DATA_DIR, filename);
+    if (fs.existsSync(filePath)) {
+      const content = fs.readFileSync(filePath, "utf8");
+      return JSON.parse(content);
+    }
+  } catch (e) {
+    console.error(`Error loading local file ${filename}:`, e);
+  }
+  return defaultValue;
+}
+
+let restaurantSettings: RestaurantSettings = loadLocalFile("restaurant_settings.json", {
   storeName: "AURA CULINARY",
   promptPayNumber: "081-234-5678",
   promptPayName: "คุณสมศรี ดีดี",
@@ -118,10 +156,10 @@ let restaurantSettings: RestaurantSettings = {
   lastLineError: "",
   supabaseUrl: process.env.VITE_SUPABASE_URL || "",
   supabaseAnonKey: process.env.VITE_SUPABASE_ANON_KEY || ""
-};
+});
 
 // Initial Menu Seed Data
-let menuItems: MenuItem[] = [
+let menuItems: MenuItem[] = loadLocalFile("menu_items.json", [
   {
     id: "A1",
     nameTh: "มันฝรั่งทอดคลุกทรัฟเฟิล",
@@ -358,18 +396,18 @@ let menuItems: MenuItem[] = [
     ingredients: ["Butterfly Pea Flower", "Honey", "Lemon", "Soda"],
     inStock: true
   }
-];
+]);
 
 // Active Categories State (with pre-seeded options)
-let categories: Category[] = [
+let categories: Category[] = loadLocalFile("categories.json", [
   { id: "appetizer", nameTh: "อาหารเรียกน้ำย่อย", nameEn: "Appetizers", emoji: "🥗" },
   { id: "main", nameTh: "อาหารจานหลัก", nameEn: "Mains", emoji: "🥩" },
   { id: "dessert", nameTh: "ของหวาน", nameEn: "Desserts", emoji: "🍨" },
   { id: "beverage", nameTh: "เครื่องดื่ม", nameEn: "Beverages", emoji: "🍹" }
-];
+]);
 
 // Initial Orders Seed Data (to make the admin dashboard look active and ready instantly)
-let orders: Order[] = [
+let orders: Order[] = loadLocalFile("orders.json", [
   {
     id: "ORD-1001",
     orderNumber: "1001",
@@ -415,7 +453,7 @@ let orders: Order[] = [
     status: "pending",
     timestamp: new Date(Date.now() - 60000 * 5).toISOString() // 5 mins ago
   }
-];
+]);
 
 export interface Reservation {
   id: string;
@@ -430,7 +468,7 @@ export interface Reservation {
   timestamp: string;
 }
 
-let reservations: Reservation[] = [
+let reservations: Reservation[] = loadLocalFile("reservations.json", [
   {
     id: "RES-2001",
     customerName: "คุณวิภาวี",
@@ -455,9 +493,9 @@ let reservations: Reservation[] = [
     status: "pending",
     timestamp: new Date().toISOString()
   }
-];
+]);
 
-let orderCounter = 1004;
+let orderCounter = loadLocalFile("order_counter.json", 1004);
 
 // --- SUPABASE PERSISTENCE & REALTIME SYNC ---
 
@@ -477,6 +515,7 @@ function getSupabase() {
 
 // Helper to sync restaurant settings to Supabase
 async function syncSettingsToSupabase() {
+  saveLocalFile("restaurant_settings.json", restaurantSettings);
   const supabase = getSupabase();
   if (!supabase) return;
   try {
@@ -505,6 +544,8 @@ async function syncSettingsToSupabase() {
 
 // Helper to sync an order to Supabase
 async function syncOrderToSupabase(order: Order) {
+  saveLocalFile("orders.json", orders);
+  saveLocalFile("order_counter.json", orderCounter);
   const supabase = getSupabase();
   if (!supabase) return;
   try {
@@ -531,6 +572,7 @@ async function syncOrderToSupabase(order: Order) {
 
 // Helper to delete an order from Supabase
 async function deleteOrderFromSupabase(id: string) {
+  saveLocalFile("orders.json", orders);
   const supabase = getSupabase();
   if (!supabase) return;
   try {
@@ -543,6 +585,7 @@ async function deleteOrderFromSupabase(id: string) {
 
 // Helper to sync a reservation to Supabase
 async function syncReservationToSupabase(resv: Reservation) {
+  saveLocalFile("reservations.json", reservations);
   const supabase = getSupabase();
   if (!supabase) return;
   try {
@@ -566,6 +609,7 @@ async function syncReservationToSupabase(resv: Reservation) {
 
 // Helper to delete a reservation from Supabase
 async function deleteReservationFromSupabase(id: string) {
+  saveLocalFile("reservations.json", reservations);
   const supabase = getSupabase();
   if (!supabase) return;
   try {
@@ -578,6 +622,7 @@ async function deleteReservationFromSupabase(id: string) {
 
 // Helper to sync a menu item to Supabase
 async function syncMenuItemToSupabase(item: MenuItem) {
+  saveLocalFile("menu_items.json", menuItems);
   const supabase = getSupabase();
   if (!supabase) return;
   try {
@@ -604,6 +649,7 @@ async function syncMenuItemToSupabase(item: MenuItem) {
 
 // Helper to delete a menu item from Supabase
 async function deleteMenuItemFromSupabase(id: string) {
+  saveLocalFile("menu_items.json", menuItems);
   const supabase = getSupabase();
   if (!supabase) return;
   try {
@@ -611,6 +657,37 @@ async function deleteMenuItemFromSupabase(id: string) {
     if (error) console.error("Supabase menu item deletion error:", error);
   } catch (e) {
     console.error("Supabase menu item deletion failed:", e);
+  }
+}
+
+// Helper to sync category to Supabase
+async function syncCategoryToSupabase(cat: Category) {
+  saveLocalFile("categories.json", categories);
+  const supabase = getSupabase();
+  if (!supabase) return;
+  try {
+    const { error } = await supabase.from('categories').upsert({
+      id: cat.id,
+      name_th: cat.nameTh,
+      name_en: cat.nameEn,
+      emoji: cat.emoji || "🍽️"
+    });
+    if (error) console.error("Supabase category sync error:", error);
+  } catch (e) {
+    // Graceful fallback if categories table does not exist
+  }
+}
+
+// Helper to delete category from Supabase
+async function deleteCategoryFromSupabase(id: string) {
+  saveLocalFile("categories.json", categories);
+  const supabase = getSupabase();
+  if (!supabase) return;
+  try {
+    const { error } = await supabase.from('categories').delete().eq('id', id);
+    if (error) console.error("Supabase category deletion error:", error);
+  } catch (e) {
+    // Graceful fallback if categories table does not exist
   }
 }
 
@@ -754,6 +831,32 @@ async function initializeSupabaseData() {
       }
     }
 
+    // 5. Load Categories
+    try {
+      const { data: catData, error: catErr } = await supabase
+        .from('categories')
+        .select('*');
+        
+      if (catErr) {
+        console.error("Error loading categories from Supabase:", catErr);
+      } else if (catData && catData.length > 0) {
+        categories = catData.map(c => ({
+          id: c.id,
+          nameTh: c.name_th,
+          nameEn: c.name_en,
+          emoji: c.emoji || "🍽️"
+        }));
+        console.log(`Loaded ${categories.length} categories from Supabase.`);
+      } else {
+        console.log("No categories found in Supabase. Seeding default categories...");
+        for (const cat of categories) {
+          await syncCategoryToSupabase(cat);
+        }
+      }
+    } catch (e) {
+      // Table may not exist yet, which is fine
+    }
+
   } catch (e) {
     console.error("Exception in Supabase loading:", e);
   }
@@ -795,6 +898,27 @@ async function ensureSettingsLoaded() {
     }
   } catch (e) {
     console.error("Error dynamically loading settings:", e);
+  }
+}
+
+async function ensureCategoriesLoaded() {
+  const supabase = getSupabase();
+  if (!supabase) return;
+  try {
+    const { data: catData, error: catErr } = await supabase
+      .from('categories')
+      .select('*');
+      
+    if (!catErr && catData && catData.length > 0) {
+      categories = catData.map(c => ({
+        id: c.id,
+        nameTh: c.name_th,
+        nameEn: c.name_en,
+        emoji: c.emoji || "🍽️"
+      }));
+    }
+  } catch (e) {
+    // Table may not exist yet in client's database, graceful fallback
   }
 }
 
@@ -924,12 +1048,13 @@ app.get("/api/menu", async (req, res) => {
 });
 
 // GET /api/categories
-app.get("/api/categories", (req, res) => {
+app.get("/api/categories", async (req, res) => {
+  await ensureCategoriesLoaded();
   res.json(categories);
 });
 
 // POST /api/categories
-app.post("/api/categories", (req, res) => {
+app.post("/api/categories", async (req, res) => {
   const { nameTh, nameEn, emoji } = req.body;
   if (!nameTh || !nameEn) {
     return res.status(400).json({ error: "Required fields nameTh and nameEn are missing" });
@@ -950,11 +1075,12 @@ app.post("/api/categories", (req, res) => {
   };
 
   categories.push(newCategory);
+  syncCategoryToSupabase(newCategory).catch(e => console.error(e));
   res.status(201).json(newCategory);
 });
 
 // DELETE /api/categories/:id
-app.delete("/api/categories/:id", (req, res) => {
+app.delete("/api/categories/:id", async (req, res) => {
   const { id } = req.params;
   const index = categories.findIndex(c => c.id === id);
   if (index === -1) {
@@ -963,18 +1089,22 @@ app.delete("/api/categories/:id", (req, res) => {
 
   // Delete category
   categories.splice(index, 1);
+  deleteCategoryFromSupabase(id).catch(e => console.error(e));
 
   // Reassign all items under this category to "other" category
   menuItems.forEach(item => {
     if (item.category === id) {
       item.category = "other";
+      syncMenuItemToSupabase(item).catch(e => console.error(e));
     }
   });
 
   // Ensure "other" category exists in categories array if some item was moved to it
   const hasItemsInOther = menuItems.some(item => item.category === "other");
   if (hasItemsInOther && !categories.some(c => c.id === "other")) {
-    categories.push({ id: "other", nameTh: "อื่นๆ", nameEn: "Other", emoji: "📦" });
+    const otherCat = { id: "other", nameTh: "อื่นๆ", nameEn: "Other", emoji: "📦" };
+    categories.push(otherCat);
+    syncCategoryToSupabase(otherCat).catch(e => console.error(e));
   }
 
   res.json({ success: true, deletedId: id });

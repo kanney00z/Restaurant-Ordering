@@ -180,6 +180,27 @@ export default function App() {
   const [editSupabaseAnonKey, setEditSupabaseAnonKey] = useState('');
   const [settingsSuccessMsg, setSettingsSuccessMsg] = useState('');
 
+  // Scoped fetch to safely inject current Supabase credentials into API requests
+  const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const urlStr = typeof input === 'string' ? input : input instanceof URL ? input.toString() : (input && (input as any).url) || '';
+    if (urlStr.includes('/api/')) {
+      const activeUrl = settings.supabaseUrl || '';
+      const activeKey = settings.supabaseAnonKey || '';
+      if (activeUrl && activeKey) {
+        init = init || {};
+        const headers = new Headers(init.headers || {});
+        if (!headers.has('x-supabase-url')) {
+          headers.set('x-supabase-url', activeUrl);
+        }
+        if (!headers.has('x-supabase-key')) {
+          headers.set('x-supabase-key', activeKey);
+        }
+        init.headers = headers;
+      }
+    }
+    return window.fetch(input, init);
+  };
+
   // 5 Feature Upgrades states
   
   // 1. Smart Reservations
@@ -480,6 +501,8 @@ export default function App() {
     }
   }, [orders, hasTracked, searchTrackerName]);
 
+
+
   // Fetch initial state from Server
   useEffect(() => {
     fetchMenu();
@@ -501,12 +524,12 @@ export default function App() {
       setIsScannedTable(false);
     }
     
-    // Auto-refresh orders every 8 seconds in the background to emulate live updates
+    // Auto-refresh orders every 2 seconds in the background to emulate live updates
     const timer = setInterval(() => {
       fetchOrders();
       fetchAnalytics();
       fetchReservations();
-    }, 8000);
+    }, 2000);
     return () => clearInterval(timer);
   }, []);
 
