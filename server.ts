@@ -762,6 +762,135 @@ async function initializeSupabaseData() {
 // Initialize Supabase data immediately on start
 initializeSupabaseData().catch(e => console.error("Error initializing Supabase data on start:", e));
 
+// Loader helpers to ensure data is fetched from Supabase if configured (crucial for stateless serverless environments)
+async function ensureSettingsLoaded() {
+  const supabase = getSupabase();
+  if (!supabase) return;
+  try {
+    const { data: settingsData, error: settingsErr } = await supabase
+      .from('restaurant_settings')
+      .select('*')
+      .eq('id', 'default')
+      .maybeSingle();
+      
+    if (!settingsErr && settingsData) {
+      restaurantSettings = {
+        storeName: settingsData.store_name,
+        promptPayNumber: settingsData.promptpay_number,
+        promptPayName: settingsData.promptpay_name,
+        lineChannelAccessToken: settingsData.line_channel_access_token,
+        lineUserId: settingsData.line_user_id,
+        phone: settingsData.phone,
+        tagline: settingsData.tagline,
+        openTime: settingsData.open_time,
+        closeTime: settingsData.close_time,
+        closedDays: Array.isArray(settingsData.closed_days) ? settingsData.closed_days : [],
+        isClosedTemporarily: settingsData.is_closed_temporarily,
+        isReservationEnabled: settingsData.is_reservation_enabled,
+        isLoyaltyEnabled: settingsData.is_loyalty_enabled,
+        lastLineError: settingsData.last_line_error,
+        supabaseUrl: restaurantSettings.supabaseUrl,
+        supabaseAnonKey: restaurantSettings.supabaseAnonKey
+      };
+    }
+  } catch (e) {
+    console.error("Error dynamically loading settings:", e);
+  }
+}
+
+async function ensureMenuItemsLoaded() {
+  const supabase = getSupabase();
+  if (!supabase) return;
+  try {
+    const { data: menuData, error: menuErr } = await supabase
+      .from('menu_items')
+      .select('*');
+      
+    if (!menuErr && menuData && menuData.length > 0) {
+      menuItems = menuData.map(item => ({
+        id: item.id,
+        nameTh: item.name_th,
+        nameEn: item.name_en,
+        descriptionTh: item.description_th || "",
+        descriptionEn: item.description_en || "",
+        price: Number(item.price),
+        category: item.category,
+        image: item.image,
+        isPopular: item.is_popular,
+        prepTime: item.prep_time,
+        ingredients: item.ingredients || [],
+        inStock: item.in_stock,
+        optionGroups: item.option_groups || []
+      }));
+    }
+  } catch (e) {
+    console.error("Error dynamically loading menu items:", e);
+  }
+}
+
+async function ensureOrdersLoaded() {
+  const supabase = getSupabase();
+  if (!supabase) return;
+  try {
+    const { data: ordersData, error: ordersErr } = await supabase
+      .from('orders')
+      .select('*');
+      
+    if (!ordersErr && ordersData && ordersData.length > 0) {
+      orders = ordersData.map(order => ({
+        id: order.id,
+        orderNumber: order.order_number,
+        customerName: order.customer_name,
+        dineInType: order.dine_in_type,
+        tableNumber: order.table_number,
+        deliveryAddress: order.delivery_address,
+        phone: order.phone,
+        paymentMethod: order.payment_method,
+        paymentSlip: order.payment_slip,
+        items: order.items,
+        totalAmount: Number(order.total_amount),
+        status: order.status,
+        timestamp: order.timestamp
+      }));
+      
+      const maxOrderNum = ordersData.reduce((max, o) => {
+        const num = Number(o.order_number);
+        return isNaN(num) ? max : Math.max(max, num);
+      }, 1003);
+      orderCounter = maxOrderNum + 1;
+    }
+  } catch (e) {
+    console.error("Error dynamically loading orders:", e);
+  }
+}
+
+async function ensureReservationsLoaded() {
+  const supabase = getSupabase();
+  if (!supabase) return;
+  try {
+    const { data: resData, error: resErr } = await supabase
+      .from('reservations')
+      .select('*');
+      
+    if (!resErr && resData && resData.length > 0) {
+      reservations = resData.map(resv => ({
+        id: resv.id,
+        customerName: resv.customer_name,
+        phone: resv.phone,
+        date: resv.date,
+        time: resv.time,
+        partySize: Number(resv.party_size),
+        tablePreference: resv.table_preference,
+        specialRequest: resv.special_request,
+        status: resv.status,
+        timestamp: resv.timestamp
+      }));
+    }
+  } catch (e) {
+    console.error("Error dynamically loading reservations:", e);
+  }
+}
+
 // --- END SUPABASE PERSISTENCE ---
 
 // Lazy-loaded Gemini Client Helper
@@ -789,7 +918,8 @@ function getGeminiAI(): GoogleGenAI | null {
 // REST API Endpoints
 
 // GET /api/menu
-app.get("/api/menu", (req, res) => {
+app.get("/api/menu", async (req, res) => {
+  await ensureMenuItemsLoaded();
   res.json(menuItems);
 });
 
@@ -851,7 +981,8 @@ app.delete("/api/categories/:id", (req, res) => {
 });
 
 // POST /api/menu (Create Menu Item)
-app.post("/api/menu", (req, res) => {
+app.post("/api/menu", async (req, res) => {
+  await ensureMenuItemsLoaded();
   const { nameTh, nameEn, descriptionTh, descriptionEn, price, category, image, prepTime, ingredients } = req.body;
   if (!nameTh || !nameEn || !price || !category) {
     return res.status(400).json({ error: "Required fields are missing" });
@@ -878,7 +1009,8 @@ app.post("/api/menu", (req, res) => {
 });
 
 // PUT /api/menu/:id (Update Menu Item)
-app.put("/api/menu/:id", (req, res) => {
+app.put("/api/menu/:id", async (req, res) => {
+  await ensureMenuItemsLoaded();
   const { id } = req.params;
   const index = menuItems.findIndex(item => item.id === id);
   if (index === -1) {
@@ -896,7 +1028,8 @@ app.put("/api/menu/:id", (req, res) => {
 });
 
 // DELETE /api/menu/:id (Delete Menu Item)
-app.delete("/api/menu/:id", (req, res) => {
+app.delete("/api/menu/:id", async (req, res) => {
+  await ensureMenuItemsLoaded();
   const { id } = req.params;
   const index = menuItems.findIndex(item => item.id === id);
   if (index === -1) {
@@ -909,7 +1042,8 @@ app.delete("/api/menu/:id", (req, res) => {
 });
 
 // POST /api/menu/:id/toggle-stock
-app.post("/api/menu/:id/toggle-stock", (req, res) => {
+app.post("/api/menu/:id/toggle-stock", async (req, res) => {
+  await ensureMenuItemsLoaded();
   const { id } = req.params;
   const item = menuItems.find(item => item.id === id);
   if (!item) {
@@ -1244,12 +1378,15 @@ async function sendLineNotification(order: Order) {
 }
 
 // GET /api/orders
-app.get("/api/orders", (req, res) => {
+app.get("/api/orders", async (req, res) => {
+  await ensureOrdersLoaded();
   res.json(orders);
 });
 
 // POST /api/orders (Create Order)
-app.post("/api/orders", (req, res) => {
+app.post("/api/orders", async (req, res) => {
+  await ensureOrdersLoaded();
+  await ensureMenuItemsLoaded();
   const { customerName, dineInType, tableNumber, deliveryAddress, phone, items, paymentMethod, paymentSlip } = req.body;
   
   if (!customerName || !dineInType || !items || !items.length) {
@@ -1320,7 +1457,8 @@ app.post("/api/orders", (req, res) => {
 });
 
 // DELETE /api/orders/:id (Delete Order)
-app.delete("/api/orders/:id", (req, res) => {
+app.delete("/api/orders/:id", async (req, res) => {
+  await ensureOrdersLoaded();
   const { id } = req.params;
   const index = orders.findIndex(o => o.id === id);
   if (index === -1) {
@@ -1332,7 +1470,8 @@ app.delete("/api/orders/:id", (req, res) => {
 });
 
 // POST /api/orders/:id/update-item-price (Update Price of Item inside Order)
-app.post("/api/orders/:id/update-item-price", (req, res) => {
+app.post("/api/orders/:id/update-item-price", async (req, res) => {
+  await ensureOrdersLoaded();
   const { id } = req.params;
   const { itemIndex, price } = req.body;
 
@@ -1355,7 +1494,9 @@ app.post("/api/orders/:id/update-item-price", (req, res) => {
 });
 
 // PUT /api/orders/:id/items (Edit/Update items of an existing order)
-app.put("/api/orders/:id/items", (req, res) => {
+app.put("/api/orders/:id/items", async (req, res) => {
+  await ensureOrdersLoaded();
+  await ensureMenuItemsLoaded();
   const { id } = req.params;
   const { items } = req.body;
 
@@ -1414,7 +1555,8 @@ app.put("/api/orders/:id/items", (req, res) => {
 });
 
 // POST /api/orders/:id/status (Update Status)
-app.post("/api/orders/:id/status", (req, res) => {
+app.post("/api/orders/:id/status", async (req, res) => {
+  await ensureOrdersLoaded();
   const { id } = req.params;
   const { status } = req.body;
   
@@ -1433,7 +1575,9 @@ app.post("/api/orders/:id/status", (req, res) => {
 });
 
 // GET /api/analytics
-app.get("/api/analytics", (req, res) => {
+app.get("/api/analytics", async (req, res) => {
+  await ensureOrdersLoaded();
+  await ensureMenuItemsLoaded();
   const totalRevenue = orders
     .filter(o => o.status !== "cancelled")
     .reduce((sum, o) => sum + o.totalAmount, 0);
@@ -1494,12 +1638,14 @@ app.get("/api/analytics", (req, res) => {
 });
 
 // GET /api/settings
-app.get("/api/settings", (req, res) => {
+app.get("/api/settings", async (req, res) => {
+  await ensureSettingsLoaded();
   res.json(restaurantSettings);
 });
 
 // POST /api/settings
-app.post("/api/settings", (req, res) => {
+app.post("/api/settings", async (req, res) => {
+  await ensureSettingsLoaded();
   const { 
     storeName, 
     promptPayNumber, 
@@ -1558,12 +1704,14 @@ app.post("/api/settings", (req, res) => {
 });
 
 // GET /api/reservations - Get all reservations
-app.get("/api/reservations", (req, res) => {
+app.get("/api/reservations", async (req, res) => {
+  await ensureReservationsLoaded();
   res.json(reservations);
 });
 
 // POST /api/reservations - Create a reservation
-app.post("/api/reservations", (req, res) => {
+app.post("/api/reservations", async (req, res) => {
+  await ensureReservationsLoaded();
   const { customerName, phone, date, time, partySize, tablePreference, specialRequest } = req.body;
   if (!customerName || !phone || !date || !time || !partySize) {
     return res.status(400).json({ error: "Missing required reservation fields" });
@@ -1588,7 +1736,8 @@ app.post("/api/reservations", (req, res) => {
 });
 
 // POST /api/reservations/:id/status - Update reservation status
-app.post("/api/reservations/:id/status", (req, res) => {
+app.post("/api/reservations/:id/status", async (req, res) => {
+  await ensureReservationsLoaded();
   const { id } = req.params;
   const { status } = req.body;
   if (!status || !['pending', 'confirmed', 'cancelled'].includes(status)) {
@@ -1606,7 +1755,8 @@ app.post("/api/reservations/:id/status", (req, res) => {
 });
 
 // DELETE /api/reservations/:id - Delete a reservation permanently
-app.delete("/api/reservations/:id", (req, res) => {
+app.delete("/api/reservations/:id", async (req, res) => {
+  await ensureReservationsLoaded();
   const { id } = req.params;
   const index = reservations.findIndex(r => r.id === id);
   if (index === -1) {
