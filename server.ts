@@ -497,6 +497,11 @@ let reservations: Reservation[] = loadLocalFile("reservations.json", [
 
 let orderCounter = loadLocalFile("order_counter.json", 1004);
 
+let deletedOrderIds: string[] = loadLocalFile("deleted_orders.json", []);
+let deletedReservationIds: string[] = loadLocalFile("deleted_reservations.json", []);
+let deletedMenuItemIds: string[] = loadLocalFile("deleted_menu_items.json", []);
+let deletedCategoryIds: string[] = loadLocalFile("deleted_categories.json", []);
+
 // --- SUPABASE PERSISTENCE & REALTIME SYNC ---
 
 // Lazy-initialized Supabase Client
@@ -572,6 +577,10 @@ async function syncOrderToSupabase(order: Order) {
 
 // Helper to delete an order from Supabase
 async function deleteOrderFromSupabase(id: string) {
+  if (!deletedOrderIds.includes(id)) {
+    deletedOrderIds.push(id);
+    saveLocalFile("deleted_orders.json", deletedOrderIds);
+  }
   saveLocalFile("orders.json", orders);
   const supabase = getSupabase();
   if (!supabase) return;
@@ -609,6 +618,10 @@ async function syncReservationToSupabase(resv: Reservation) {
 
 // Helper to delete a reservation from Supabase
 async function deleteReservationFromSupabase(id: string) {
+  if (!deletedReservationIds.includes(id)) {
+    deletedReservationIds.push(id);
+    saveLocalFile("deleted_reservations.json", deletedReservationIds);
+  }
   saveLocalFile("reservations.json", reservations);
   const supabase = getSupabase();
   if (!supabase) return;
@@ -649,6 +662,10 @@ async function syncMenuItemToSupabase(item: MenuItem) {
 
 // Helper to delete a menu item from Supabase
 async function deleteMenuItemFromSupabase(id: string) {
+  if (!deletedMenuItemIds.includes(id)) {
+    deletedMenuItemIds.push(id);
+    saveLocalFile("deleted_menu_items.json", deletedMenuItemIds);
+  }
   saveLocalFile("menu_items.json", menuItems);
   const supabase = getSupabase();
   if (!supabase) return;
@@ -680,6 +697,10 @@ async function syncCategoryToSupabase(cat: Category) {
 
 // Helper to delete category from Supabase
 async function deleteCategoryFromSupabase(id: string) {
+  if (!deletedCategoryIds.includes(id)) {
+    deletedCategoryIds.push(id);
+    saveLocalFile("deleted_categories.json", deletedCategoryIds);
+  }
   saveLocalFile("categories.json", categories);
   const supabase = getSupabase();
   if (!supabase) return;
@@ -743,21 +764,23 @@ async function initializeSupabaseData() {
     if (menuErr) {
       console.error("Error loading menu from Supabase:", menuErr);
     } else if (menuData && menuData.length > 0) {
-      menuItems = menuData.map(item => ({
-        id: item.id,
-        nameTh: item.name_th,
-        nameEn: item.name_en,
-        descriptionTh: item.description_th || "",
-        descriptionEn: item.description_en || "",
-        price: Number(item.price),
-        category: item.category,
-        image: item.image,
-        isPopular: item.is_popular,
-        prepTime: item.prep_time,
-        ingredients: item.ingredients || [],
-        inStock: item.in_stock,
-        optionGroups: item.option_groups || []
-      }));
+      menuItems = menuData
+        .filter(item => !deletedMenuItemIds.includes(item.id))
+        .map(item => ({
+          id: item.id,
+          nameTh: item.name_th,
+          nameEn: item.name_en,
+          descriptionTh: item.description_th || "",
+          descriptionEn: item.description_en || "",
+          price: Number(item.price),
+          category: item.category,
+          image: item.image,
+          isPopular: item.is_popular,
+          prepTime: item.prep_time,
+          ingredients: item.ingredients || [],
+          inStock: item.in_stock,
+          optionGroups: item.option_groups || []
+        }));
       console.log(`Loaded ${menuItems.length} menu items from Supabase.`);
     } else {
       console.log("No menu items found in Supabase. Seeding default menu items...");
@@ -774,21 +797,23 @@ async function initializeSupabaseData() {
     if (ordersErr) {
       console.error("Error loading orders from Supabase:", ordersErr);
     } else if (ordersData && ordersData.length > 0) {
-      orders = ordersData.map(order => ({
-        id: order.id,
-        orderNumber: order.order_number,
-        customerName: order.customer_name,
-        dineInType: order.dine_in_type,
-        tableNumber: order.table_number,
-        deliveryAddress: order.delivery_address,
-        phone: order.phone,
-        paymentMethod: order.payment_method,
-        paymentSlip: order.payment_slip,
-        items: order.items,
-        totalAmount: Number(order.total_amount),
-        status: order.status,
-        timestamp: order.timestamp
-      }));
+      orders = ordersData
+        .filter(order => !deletedOrderIds.includes(order.id))
+        .map(order => ({
+          id: order.id,
+          orderNumber: order.order_number,
+          customerName: order.customer_name,
+          dineInType: order.dine_in_type,
+          tableNumber: order.table_number,
+          deliveryAddress: order.delivery_address,
+          phone: order.phone,
+          paymentMethod: order.payment_method,
+          paymentSlip: order.payment_slip,
+          items: order.items,
+          totalAmount: Number(order.total_amount),
+          status: order.status,
+          timestamp: order.timestamp
+        }));
       
       const maxOrderNum = ordersData.reduce((max, o) => {
         const num = Number(o.order_number);
@@ -811,18 +836,20 @@ async function initializeSupabaseData() {
     if (resErr) {
       console.error("Error loading reservations from Supabase:", resErr);
     } else if (resData && resData.length > 0) {
-      reservations = resData.map(resv => ({
-        id: resv.id,
-        customerName: resv.customer_name,
-        phone: resv.phone,
-        date: resv.date,
-        time: resv.time,
-        partySize: Number(resv.party_size),
-        tablePreference: resv.table_preference,
-        specialRequest: resv.special_request,
-        status: resv.status,
-        timestamp: resv.timestamp
-      }));
+      reservations = resData
+        .filter(resv => !deletedReservationIds.includes(resv.id))
+        .map(resv => ({
+          id: resv.id,
+          customerName: resv.customer_name,
+          phone: resv.phone,
+          date: resv.date,
+          time: resv.time,
+          partySize: Number(resv.party_size),
+          tablePreference: resv.table_preference,
+          specialRequest: resv.special_request,
+          status: resv.status,
+          timestamp: resv.timestamp
+        }));
       console.log(`Loaded ${reservations.length} reservations from Supabase.`);
     } else {
       console.log("No reservations found in Supabase. Seeding default reservations...");
@@ -840,12 +867,14 @@ async function initializeSupabaseData() {
       if (catErr) {
         console.error("Error loading categories from Supabase:", catErr);
       } else if (catData && catData.length > 0) {
-        categories = catData.map(c => ({
-          id: c.id,
-          nameTh: c.name_th,
-          nameEn: c.name_en,
-          emoji: c.emoji || "🍽️"
-        }));
+        categories = catData
+          .filter(c => !deletedCategoryIds.includes(c.id))
+          .map(c => ({
+            id: c.id,
+            nameTh: c.name_th,
+            nameEn: c.name_en,
+            emoji: c.emoji || "🍽️"
+          }));
         console.log(`Loaded ${categories.length} categories from Supabase.`);
       } else {
         console.log("No categories found in Supabase. Seeding default categories...");
@@ -909,13 +938,15 @@ async function ensureCategoriesLoaded() {
       .from('categories')
       .select('*');
       
-    if (!catErr && catData && catData.length > 0) {
-      categories = catData.map(c => ({
-        id: c.id,
-        nameTh: c.name_th,
-        nameEn: c.name_en,
-        emoji: c.emoji || "🍽️"
-      }));
+    if (!catErr && catData) {
+      categories = catData
+        .filter(c => !deletedCategoryIds.includes(c.id))
+        .map(c => ({
+          id: c.id,
+          nameTh: c.name_th,
+          nameEn: c.name_en,
+          emoji: c.emoji || "🍽️"
+        }));
     }
   } catch (e) {
     // Table may not exist yet in client's database, graceful fallback
@@ -930,22 +961,24 @@ async function ensureMenuItemsLoaded() {
       .from('menu_items')
       .select('*');
       
-    if (!menuErr && menuData && menuData.length > 0) {
-      menuItems = menuData.map(item => ({
-        id: item.id,
-        nameTh: item.name_th,
-        nameEn: item.name_en,
-        descriptionTh: item.description_th || "",
-        descriptionEn: item.description_en || "",
-        price: Number(item.price),
-        category: item.category,
-        image: item.image,
-        isPopular: item.is_popular,
-        prepTime: item.prep_time,
-        ingredients: item.ingredients || [],
-        inStock: item.in_stock,
-        optionGroups: item.option_groups || []
-      }));
+    if (!menuErr && menuData) {
+      menuItems = menuData
+        .filter(item => !deletedMenuItemIds.includes(item.id))
+        .map(item => ({
+          id: item.id,
+          nameTh: item.name_th,
+          nameEn: item.name_en,
+          descriptionTh: item.description_th || "",
+          descriptionEn: item.description_en || "",
+          price: Number(item.price),
+          category: item.category,
+          image: item.image,
+          isPopular: item.is_popular,
+          prepTime: item.prep_time,
+          ingredients: item.ingredients || [],
+          inStock: item.in_stock,
+          optionGroups: item.option_groups || []
+        }));
     }
   } catch (e) {
     console.error("Error dynamically loading menu items:", e);
@@ -960,22 +993,24 @@ async function ensureOrdersLoaded() {
       .from('orders')
       .select('*');
       
-    if (!ordersErr && ordersData && ordersData.length > 0) {
-      orders = ordersData.map(order => ({
-        id: order.id,
-        orderNumber: order.order_number,
-        customerName: order.customer_name,
-        dineInType: order.dine_in_type,
-        tableNumber: order.table_number,
-        deliveryAddress: order.delivery_address,
-        phone: order.phone,
-        paymentMethod: order.payment_method,
-        paymentSlip: order.payment_slip,
-        items: order.items,
-        totalAmount: Number(order.total_amount),
-        status: order.status,
-        timestamp: order.timestamp
-      }));
+    if (!ordersErr && ordersData) {
+      orders = ordersData
+        .filter(order => !deletedOrderIds.includes(order.id))
+        .map(order => ({
+          id: order.id,
+          orderNumber: order.order_number,
+          customerName: order.customer_name,
+          dineInType: order.dine_in_type,
+          tableNumber: order.table_number,
+          deliveryAddress: order.delivery_address,
+          phone: order.phone,
+          paymentMethod: order.payment_method,
+          paymentSlip: order.payment_slip,
+          items: order.items,
+          totalAmount: Number(order.total_amount),
+          status: order.status,
+          timestamp: order.timestamp
+        }));
       
       const maxOrderNum = ordersData.reduce((max, o) => {
         const num = Number(o.order_number);
@@ -996,19 +1031,21 @@ async function ensureReservationsLoaded() {
       .from('reservations')
       .select('*');
       
-    if (!resErr && resData && resData.length > 0) {
-      reservations = resData.map(resv => ({
-        id: resv.id,
-        customerName: resv.customer_name,
-        phone: resv.phone,
-        date: resv.date,
-        time: resv.time,
-        partySize: Number(resv.party_size),
-        tablePreference: resv.table_preference,
-        specialRequest: resv.special_request,
-        status: resv.status,
-        timestamp: resv.timestamp
-      }));
+    if (!resErr && resData) {
+      reservations = resData
+        .filter(resv => !deletedReservationIds.includes(resv.id))
+        .map(resv => ({
+          id: resv.id,
+          customerName: resv.customer_name,
+          phone: resv.phone,
+          date: resv.date,
+          time: resv.time,
+          partySize: Number(resv.party_size),
+          tablePreference: resv.table_preference,
+          specialRequest: resv.special_request,
+          status: resv.status,
+          timestamp: resv.timestamp
+        }));
     }
   } catch (e) {
     console.error("Error dynamically loading reservations:", e);
