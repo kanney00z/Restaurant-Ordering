@@ -3702,7 +3702,13 @@ create table if not exists reservations (
 alter publication supabase_realtime add table orders;
 alter publication supabase_realtime add table reservations;
 alter publication supabase_realtime add table restaurant_settings;
-alter publication supabase_realtime add table menu_items;`}
+alter publication supabase_realtime add table menu_items;
+
+-- Disable Row Level Security (RLS) to allow public read/write/delete access via client Anon Key
+alter table restaurant_settings disable row level security;
+alter table menu_items disable row level security;
+alter table orders disable row level security;
+alter table reservations disable row level security;`}
                         />
                         <button
                           type="button"
@@ -3782,7 +3788,13 @@ create table if not exists reservations (
 alter publication supabase_realtime add table orders;
 alter publication supabase_realtime add table reservations;
 alter publication supabase_realtime add table restaurant_settings;
-alter publication supabase_realtime add table menu_items;`);
+alter publication supabase_realtime add table menu_items;
+
+-- Disable Row Level Security (RLS) to allow public read/write/delete access via client Anon Key
+alter table restaurant_settings disable row level security;
+alter table menu_items disable row level security;
+alter table orders disable row level security;
+alter table reservations disable row level security;`);
                             alert('คัดลอก SQL Script เรียบร้อยแล้ว!');
                           }}
                           className="w-full bg-slate-900 hover:bg-slate-850 text-[#3ECF8E] hover:text-white border border-[#3ECF8E]/20 text-[9px] font-bold py-1 rounded transition-colors"
