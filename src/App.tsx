@@ -47,6 +47,12 @@ import { Category, MenuItem, Order, CartItem, Customizations, AnalyticsData, Res
 import { createClient } from '@supabase/supabase-js';
 import DeliveryMap from './components/DeliveryMap';
 
+const formatPrice = (val: any): string => {
+  if (val === null || val === undefined) return '0';
+  const num = Number(val);
+  return isNaN(num) ? '0' : num.toLocaleString();
+};
+
 const isNoodleDish = (item: MenuItem) => {
   const name = (item.nameTh + " " + item.nameEn + " " + item.descriptionTh + " " + item.descriptionEn).toLowerCase();
   return name.includes('เส้น') || name.includes('ก๋วยเตี๋ยว') || name.includes('ผัดไทย') || name.includes('noodle') || name.includes('pasta') || name.includes('สปาเก็ตตี้') || name.includes('เกี๊ยว') || name.includes('ราเมน') || name.includes('ราเม็ง');
@@ -180,24 +186,8 @@ export default function App() {
   const [editSupabaseAnonKey, setEditSupabaseAnonKey] = useState('');
   const [settingsSuccessMsg, setSettingsSuccessMsg] = useState('');
 
-  // Scoped fetch to safely inject current Supabase credentials into API requests
+  // Scoped fetch wrapper for API requests
   const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-    const urlStr = typeof input === 'string' ? input : input instanceof URL ? input.toString() : (input && (input as any).url) || '';
-    if (urlStr.includes('/api/')) {
-      const activeUrl = settings.supabaseUrl || '';
-      const activeKey = settings.supabaseAnonKey || '';
-      if (activeUrl && activeKey) {
-        init = init || {};
-        const headers = new Headers(init.headers || {});
-        if (!headers.has('x-supabase-url')) {
-          headers.set('x-supabase-url', activeUrl);
-        }
-        if (!headers.has('x-supabase-key')) {
-          headers.set('x-supabase-key', activeKey);
-        }
-        init.headers = headers;
-      }
-    }
     return window.fetch(input, init);
   };
 
@@ -1896,7 +1886,7 @@ export default function App() {
                         <div className="leading-tight">
                           <span className="text-[10px] text-slate-400 block uppercase tracking-wider">ราคา (THB)</span>
                           <span className="text-xl font-bold font-mono text-amber-400">
-                            ฿{item.price.toLocaleString()}
+                            ฿{formatPrice(item.price)}
                           </span>
                         </div>
                         
@@ -2155,7 +2145,7 @@ export default function App() {
                                   )}
                                 </div>
                                 <span className="font-mono text-slate-300 text-right shrink-0">
-                                  {it.price > 0 ? `฿${(it.price * it.quantity).toLocaleString()}` : 'รอกำหนดราคา ⏳'}
+                                  {it.price > 0 ? `฿${formatPrice(it.price * it.quantity)}` : 'รอกำหนดราคา ⏳'}
                                 </span>
                               </div>
                             ))}
@@ -2165,7 +2155,7 @@ export default function App() {
                           <div className="space-y-1.5 text-xs">
                             <div className="flex justify-between pt-2 border-t border-white/5 text-sm font-bold">
                               <span className="text-white">ยอดสุทธิ (Total Amount)</span>
-                              <span className="font-mono text-orange-400 text-base">฿{livePlacedOrder.totalAmount.toLocaleString()}</span>
+                              <span className="font-mono text-orange-400 text-base">฿{formatPrice(livePlacedOrder.totalAmount)}</span>
                             </div>
                           </div>
                         </div>
@@ -2302,7 +2292,7 @@ export default function App() {
                               </div>
 
                               <div className="text-right shrink-0 flex flex-col items-end gap-1.5 pl-2">
-                                <span className="text-sm font-semibold font-mono text-white">฿{itemTotal.toLocaleString()}</span>
+                                <span className="text-sm font-semibold font-mono text-white">฿{formatPrice(itemTotal)}</span>
                                 
                                 {/* Quantity buttons */}
                                 <div className="flex items-center bg-slate-900 rounded-lg p-0.5 border border-white/5">
@@ -2501,7 +2491,7 @@ export default function App() {
                               <p className="text-xs font-bold text-orange-400">สแกน QR Code เพื่อชำระเงิน</p>
                               <p className="text-[10px] text-slate-400">ชื่อบัญชี: <span className="text-white font-semibold">{settings.promptPayName}</span></p>
                               <p className="text-[10px] text-slate-400">เบอร์พร้อมเพย์: <span className="text-white font-mono font-bold">{settings.promptPayNumber}</span></p>
-                              <p className="text-[10px] text-slate-400">ยอดเงินโอน: <span className="text-orange-400 font-mono font-bold text-xs">฿{cartGrandTotal.toLocaleString()}</span></p>
+                              <p className="text-[10px] text-slate-400">ยอดเงินโอน: <span className="text-orange-400 font-mono font-bold text-xs">฿{formatPrice(cartGrandTotal)}</span></p>
                             </div>
 
                             {/* Real PromptPay QR Code using promptpay.io API */}
@@ -2573,12 +2563,12 @@ export default function App() {
                         {appliedDiscount && (
                           <div className="flex justify-between text-xs text-emerald-400 font-medium font-sans">
                             <span>ส่วนลดจากคูปอง ({appliedDiscount.code})</span>
-                            <span>-฿{appliedDiscount.amount.toLocaleString()}</span>
+                            <span>-฿{formatPrice(appliedDiscount.amount)}</span>
                           </div>
                         )}
                         <div className="flex justify-between text-sm pt-2 font-semibold border-t border-white/5">
                           <span className="text-slate-200">ราคารวมทั้งสิ้น (Total Amount)</span>
-                          <span className="font-mono text-xl text-amber-400">฿{cartGrandTotal.toLocaleString()}</span>
+                          <span className="font-mono text-xl text-amber-400">฿{formatPrice(cartGrandTotal)}</span>
                         </div>
 
                         {cart.length > 0 && (
@@ -2757,7 +2747,7 @@ export default function App() {
                                   <div className="flex justify-between text-[11px] text-slate-300">
                                     <span>{it.nameTh} x{it.quantity}</span>
                                     <span className="font-mono text-slate-400">
-                                      {it.price > 0 ? `฿${(it.price * it.quantity).toLocaleString()}` : 'รอกำหนดราคา ⏳'}
+                                      {it.price > 0 ? `฿${formatPrice(it.price * it.quantity)}` : 'รอกำหนดราคา ⏳'}
                                     </span>
                                   </div>
                                   {it.customizations && Object.keys(it.customizations).length > 0 && (
@@ -2800,7 +2790,7 @@ export default function App() {
                                 จ่าย: {order.paymentMethod === 'promptpay' ? '📱 พร้อมเพย์' : '💵 เงินสด'}
                               </span>
                               <span className="font-bold text-orange-400 font-mono text-xs">
-                                รวม: ฿{order.totalAmount.toLocaleString()}
+                                รวม: ฿{formatPrice(order.totalAmount)}
                               </span>
                             </div>
 
@@ -2839,7 +2829,7 @@ export default function App() {
                 <p className="text-xs text-slate-400 uppercase tracking-wider font-semibold">ยอดขายสะสมวันนี้</p>
                 <div className="flex justify-between items-baseline">
                   <p className="text-3xl font-bold font-mono text-amber-400">
-                    ฿{analytics?.totalRevenue.toLocaleString() || '0'}
+                    ฿{formatPrice(analytics?.totalRevenue)}
                   </p>
                   <span className="text-[10px] bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-md font-mono">LIVE</span>
                 </div>
@@ -3252,7 +3242,7 @@ export default function App() {
                                   </div>
                                   <span className="text-[10px] text-slate-500 font-bold ml-1">รวม:</span>
                                   <span className="font-mono text-slate-300 font-bold w-16 text-right">
-                                    ฿{(it.price * it.quantity).toLocaleString()}
+                                    ฿{formatPrice(it.price * it.quantity)}
                                   </span>
                                 </div>
                               </div>
@@ -3260,7 +3250,7 @@ export default function App() {
 
                             <div className="pt-2.5 flex justify-between items-baseline text-xs">
                               <span className="text-slate-400 font-medium">รวมยอดทั้งสิ้น (สุทธิ):</span>
-                              <span className="text-sm font-bold font-mono text-amber-400">฿{order.totalAmount.toLocaleString()}</span>
+                              <span className="text-sm font-bold font-mono text-amber-400">฿{formatPrice(order.totalAmount)}</span>
                             </div>
                           </div>
 
@@ -4644,7 +4634,7 @@ alter table reservations disable row level security;`);
                       (Object.values(tempOptionSelections) as OptionChoice[]).forEach((choice) => {
                         extra += choice.price || 0;
                       });
-                      return (customizingItem.price + extra).toLocaleString();
+                      return formatPrice(customizingItem.price + extra);
                     })()}
                   </span>
                 </div>
@@ -5071,7 +5061,7 @@ alter table reservations disable row level security;`);
               <div className="bg-slate-900 p-4 rounded-2xl border border-white/5 flex justify-between items-center">
                 <div>
                   <span className="text-[10px] text-slate-400 block uppercase">ยอดรวมอาหารปัจจุบันในตะกร้า</span>
-                  <span className="text-xl font-bold font-mono text-amber-400">฿{cartGrandTotal.toLocaleString()}</span>
+                  <span className="text-xl font-bold font-mono text-amber-400">฿{formatPrice(cartGrandTotal)}</span>
                 </div>
                 <div className="text-right">
                   <span className="text-[10px] text-slate-400 block uppercase">จำนวนเพื่อนที่หาร</span>
@@ -5136,7 +5126,7 @@ alter table reservations disable row level security;`);
                                 extra += choice.price || 0;
                               });
                             }
-                            return ((item.menuItem.price + extra) * item.quantity).toLocaleString();
+                            return formatPrice((item.menuItem.price + extra) * item.quantity);
                           })()}</span>
                         </div>
 
