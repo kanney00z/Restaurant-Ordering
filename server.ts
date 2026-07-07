@@ -504,13 +504,23 @@ let deletedCategoryIds: string[] = loadLocalFile("deleted_categories.json", []);
 
 // --- SUPABASE PERSISTENCE & REALTIME SYNC ---
 
+let cachedSupabaseClient: any = null;
+let lastSupabaseUrl = "";
+let lastSupabaseKey = "";
+
 // Lazy-initialized Supabase Client
 function getSupabase() {
   const url = restaurantSettings.supabaseUrl?.trim() || process.env.VITE_SUPABASE_URL?.trim();
   const key = restaurantSettings.supabaseAnonKey?.trim() || process.env.VITE_SUPABASE_ANON_KEY?.trim();
   if (url && typeof url === "string" && url.startsWith("http") && url !== "YOUR_SUPABASE_URL_HERE" && key && key !== "YOUR_SUPABASE_ANON_KEY_HERE") {
     try {
-      return createClient(url, key);
+      if (cachedSupabaseClient && url === lastSupabaseUrl && key === lastSupabaseKey) {
+        return cachedSupabaseClient;
+      }
+      lastSupabaseUrl = url;
+      lastSupabaseKey = key;
+      cachedSupabaseClient = createClient(url, key);
+      return cachedSupabaseClient;
     } catch (e) {
       console.error("Supabase client creation error:", e);
     }
@@ -670,8 +680,7 @@ async function syncOrderToSupabase(order: Order) {
     });
 
     if (error) {
-      console.warn("Supabase new-schema order upsert failed, retrying with old schema fallback...", error);
-      // Fallback to OLD schema columns
+      // Fallback silently to OLD schema columns
       const { error: oldErr } = await supabase.from('orders').upsert({
         id: order.id,
         customer_name: order.customerName,
@@ -689,7 +698,9 @@ async function syncOrderToSupabase(order: Order) {
           paymentSlip: order.paymentSlip || ""
         })
       });
-      if (oldErr) console.error("Supabase old-schema order upsert also failed:", oldErr);
+      if (oldErr) {
+        console.log("[Supabase] Fallback schema sync status:", oldErr.message || oldErr);
+      }
     }
   } catch (e) {
     console.error("Supabase order sync failed:", e);
@@ -778,8 +789,7 @@ async function syncMenuItemToSupabase(item: MenuItem) {
     });
 
     if (error) {
-      console.warn("Supabase new-schema menu upsert failed, retrying with old schema fallback...", error);
-      // Fallback to OLD schema columns
+      // Fallback silently to OLD schema columns
       const { error: oldErr } = await supabase.from('menu_items').upsert({
         id: item.id,
         name: JSON.stringify({ th: item.nameTh, en: item.nameEn }),
@@ -796,7 +806,9 @@ async function syncMenuItemToSupabase(item: MenuItem) {
         available: item.inStock,
         options: item.optionGroups || []
       });
-      if (oldErr) console.error("Supabase old-schema menu upsert also failed:", oldErr);
+      if (oldErr) {
+        console.log("[Supabase] Fallback schema menu status:", oldErr.message || oldErr);
+      }
     }
   } catch (e) {
     console.error("Supabase menu item sync failed:", e);
@@ -1010,7 +1022,10 @@ async function initializeSupabaseData() {
 initializeSupabaseData().catch(e => console.error("Error initializing Supabase data on start:", e));
 
 // Loader helpers to ensure data is fetched from Supabase if configured (crucial for stateless serverless environments)
+let lastSettingsLoadTime = 0;
 async function ensureSettingsLoaded() {
+  const now = Date.now();
+  if (now - lastSettingsLoadTime < 5000) return;
   const supabase = getSupabase();
   if (!supabase) return;
   try {
@@ -1039,13 +1054,17 @@ async function ensureSettingsLoaded() {
         supabaseUrl: restaurantSettings.supabaseUrl,
         supabaseAnonKey: restaurantSettings.supabaseAnonKey
       };
+      lastSettingsLoadTime = now;
     }
   } catch (e) {
     console.error("Error dynamically loading settings:", e);
   }
 }
 
+let lastCategoriesLoadTime = 0;
 async function ensureCategoriesLoaded() {
+  const now = Date.now();
+  if (now - lastCategoriesLoadTime < 5000) return;
   const supabase = getSupabase();
   if (!supabase) return;
   try {
@@ -1062,13 +1081,17 @@ async function ensureCategoriesLoaded() {
           nameEn: c.name_en,
           emoji: c.emoji || "🍽️"
         }));
+      lastCategoriesLoadTime = now;
     }
   } catch (e) {
     // Table may not exist yet in client's database, graceful fallback
   }
 }
 
+let lastMenuLoadTime = 0;
 async function ensureMenuItemsLoaded() {
+  const now = Date.now();
+  if (now - lastMenuLoadTime < 3000) return;
   const supabase = getSupabase();
   if (!supabase) return;
   try {
@@ -1080,13 +1103,17 @@ async function ensureMenuItemsLoaded() {
       menuItems = menuData
         .filter(item => !deletedMenuItemIds.includes(item.id))
         .map(item => mapSupabaseMenuItem(item));
+      lastMenuLoadTime = now;
     }
   } catch (e) {
     console.error("Error dynamically loading menu items:", e);
   }
 }
 
+let lastOrdersLoadTime = 0;
 async function ensureOrdersLoaded() {
+  const now = Date.now();
+  if (now - lastOrdersLoadTime < 2000) return;
   const supabase = getSupabase();
   if (!supabase) return;
   try {
@@ -1104,13 +1131,17 @@ async function ensureOrdersLoaded() {
         return isNaN(num) ? max : Math.max(max, num);
       }, 1003);
       orderCounter = maxOrderNum + 1;
+      lastOrdersLoadTime = now;
     }
   } catch (e) {
     console.error("Error dynamically loading orders:", e);
   }
 }
 
+let lastReservationsLoadTime = 0;
 async function ensureReservationsLoaded() {
+  const now = Date.now();
+  if (now - lastReservationsLoadTime < 2000) return;
   const supabase = getSupabase();
   if (!supabase) return;
   try {
@@ -1133,6 +1164,7 @@ async function ensureReservationsLoaded() {
           status: resv.status,
           timestamp: resv.timestamp
         }));
+      lastReservationsLoadTime = now;
     }
   } catch (e) {
     console.error("Error dynamically loading reservations:", e);
@@ -1199,7 +1231,7 @@ app.post("/api/categories", async (req, res) => {
   };
 
   categories.push(newCategory);
-  syncCategoryToSupabase(newCategory).catch(e => console.error(e));
+  await syncCategoryToSupabase(newCategory).catch(e => console.error(e));
   res.status(201).json(newCategory);
 });
 
@@ -1213,22 +1245,22 @@ app.delete("/api/categories/:id", async (req, res) => {
 
   // Delete category
   categories.splice(index, 1);
-  deleteCategoryFromSupabase(id).catch(e => console.error(e));
+  await deleteCategoryFromSupabase(id).catch(e => console.error(e));
 
   // Reassign all items under this category to "other" category
-  menuItems.forEach(item => {
+  for (const item of menuItems) {
     if (item.category === id) {
       item.category = "other";
-      syncMenuItemToSupabase(item).catch(e => console.error(e));
+      await syncMenuItemToSupabase(item).catch(e => console.error(e));
     }
-  });
+  }
 
   // Ensure "other" category exists in categories array if some item was moved to it
   const hasItemsInOther = menuItems.some(item => item.category === "other");
   if (hasItemsInOther && !categories.some(c => c.id === "other")) {
     const otherCat = { id: "other", nameTh: "อื่นๆ", nameEn: "Other", emoji: "📦" };
     categories.push(otherCat);
-    syncCategoryToSupabase(otherCat).catch(e => console.error(e));
+    await syncCategoryToSupabase(otherCat).catch(e => console.error(e));
   }
 
   res.json({ success: true, deletedId: id });
@@ -1258,7 +1290,7 @@ app.post("/api/menu", async (req, res) => {
   };
 
   menuItems.push(newItem);
-  syncMenuItemToSupabase(newItem).catch(e => console.error(e));
+  await syncMenuItemToSupabase(newItem).catch(e => console.error(e));
   res.status(201).json(newItem);
 });
 
@@ -1277,7 +1309,7 @@ app.put("/api/menu/:id", async (req, res) => {
     id: menuItems[index].id // keep ID immutable
   };
 
-  syncMenuItemToSupabase(menuItems[index]).catch(e => console.error(e));
+  await syncMenuItemToSupabase(menuItems[index]).catch(e => console.error(e));
   res.json(menuItems[index]);
 });
 
@@ -1306,7 +1338,7 @@ app.post("/api/menu/:id/toggle-stock", async (req, res) => {
     return res.status(404).json({ error: "Menu item not found" });
   }
   item.inStock = !item.inStock;
-  syncMenuItemToSupabase(item).catch(e => console.error(e));
+  await syncMenuItemToSupabase(item).catch(e => console.error(e));
   res.json({ id: item.id, inStock: item.inStock });
 });
 
@@ -1702,7 +1734,7 @@ app.post("/api/orders", async (req, res) => {
   orderCounter++;
 
   // Sync to Supabase
-  syncOrderToSupabase(newOrder).catch(e => console.error(e));
+  await syncOrderToSupabase(newOrder).catch(e => console.error(e));
 
   // Send LINE notification in background without blocking response
   sendLineNotification(newOrder).catch((err) => {
@@ -1747,7 +1779,7 @@ app.post("/api/orders/:id/update-item-price", async (req, res) => {
   // Recalculate totalAmount
   order.totalAmount = order.items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
 
-  syncOrderToSupabase(order).catch(e => console.error(e));
+  await syncOrderToSupabase(order).catch(e => console.error(e));
   res.json(order);
 });
 
@@ -1808,7 +1840,7 @@ app.put("/api/orders/:id/items", async (req, res) => {
   order.items = processedItems;
   order.totalAmount = calculatedTotal;
 
-  syncOrderToSupabase(order).catch(e => console.error(e));
+  await syncOrderToSupabase(order).catch(e => console.error(e));
   res.json(order);
 });
 
@@ -1828,7 +1860,7 @@ app.post("/api/orders/:id/status", async (req, res) => {
   }
 
   order.status = status;
-  syncOrderToSupabase(order).catch(e => console.error(e));
+  await syncOrderToSupabase(order).catch(e => console.error(e));
   res.json(order);
 });
 
@@ -1948,7 +1980,7 @@ app.post("/api/settings", async (req, res) => {
   };
 
   // Sync to Supabase
-  syncSettingsToSupabase().catch(e => console.error(e));
+  await syncSettingsToSupabase().catch(e => console.error(e));
 
   // If credentials changed, trigger reload
   if (supabaseUrl !== oldUrl || supabaseAnonKey !== oldKey) {
@@ -1989,7 +2021,7 @@ app.post("/api/reservations", async (req, res) => {
   };
 
   reservations.unshift(newRes);
-  syncReservationToSupabase(newRes).catch(e => console.error(e));
+  await syncReservationToSupabase(newRes).catch(e => console.error(e));
   res.status(201).json(newRes);
 });
 
@@ -2008,7 +2040,7 @@ app.post("/api/reservations/:id/status", async (req, res) => {
   }
 
   reservation.status = status;
-  syncReservationToSupabase(reservation).catch(e => console.error(e));
+  await syncReservationToSupabase(reservation).catch(e => console.error(e));
   res.json(reservation);
 });
 
