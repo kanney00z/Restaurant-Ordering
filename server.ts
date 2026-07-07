@@ -508,7 +508,7 @@ let deletedCategoryIds: string[] = loadLocalFile("deleted_categories.json", []);
 function getSupabase() {
   const url = restaurantSettings.supabaseUrl?.trim() || process.env.VITE_SUPABASE_URL?.trim();
   const key = restaurantSettings.supabaseAnonKey?.trim() || process.env.VITE_SUPABASE_ANON_KEY?.trim();
-  if (url && key) {
+  if (url && typeof url === "string" && url.startsWith("http") && url !== "YOUR_SUPABASE_URL_HERE" && key && key !== "YOUR_SUPABASE_ANON_KEY_HERE") {
     try {
       return createClient(url, key);
     } catch (e) {
@@ -516,6 +516,104 @@ function getSupabase() {
     }
   }
   return null;
+}
+
+// --- Dynamic Schema Mapping Helpers ---
+
+function mapSupabaseMenuItem(item: any): MenuItem {
+  let nameTh = item.name_th || "";
+  let nameEn = item.name_en || "";
+  
+  if (!nameTh && item.name) {
+    try {
+      const parsedName = JSON.parse(item.name);
+      nameTh = parsedName.th || item.name;
+      nameEn = parsedName.en || item.name;
+    } catch (e) {
+      nameTh = item.name || "";
+      nameEn = item.name || "";
+    }
+  }
+
+  let descriptionTh = item.description_th || "";
+  let descriptionEn = item.description_en || "";
+  let isPopular = item.is_popular === true;
+  let prepTime = item.prep_time || 15;
+  let ingredients = Array.isArray(item.ingredients) ? item.ingredients : [];
+
+  if (!descriptionTh && item.description) {
+    try {
+      const parsedDesc = JSON.parse(item.description);
+      descriptionTh = parsedDesc.th || item.description;
+      descriptionEn = parsedDesc.en || item.description;
+      isPopular = parsedDesc.isPopular === true;
+      prepTime = parsedDesc.prepTime || 15;
+      ingredients = parsedDesc.ingredients || [];
+    } catch (e) {
+      descriptionTh = item.description || "";
+      descriptionEn = item.description || "";
+    }
+  }
+
+  const inStock = item.in_stock !== undefined ? item.in_stock === true : (item.available !== false);
+  const optionGroups = item.option_groups || item.options || [];
+
+  return {
+    id: item.id,
+    nameTh,
+    nameEn,
+    descriptionTh,
+    descriptionEn,
+    price: Number(item.price || 0),
+    category: item.category || "",
+    image: item.image || "",
+    isPopular,
+    prepTime,
+    ingredients,
+    inStock,
+    optionGroups
+  };
+}
+
+function mapSupabaseOrder(order: any): Order {
+  let orderNumber = order.order_number || order.id.replace("ORD-", "");
+  let dineInType: 'dine-in' | 'delivery' = order.dine_in_type || "dine-in";
+  let tableNumber = order.table_number || "";
+  let phone = order.phone || "";
+  let paymentSlip = order.payment_slip || "";
+
+  if (order.note) {
+    try {
+      const parsedNote = JSON.parse(order.note);
+      orderNumber = parsedNote.orderNumber || orderNumber;
+      dineInType = parsedNote.dineInType || dineInType;
+      tableNumber = parsedNote.tableNumber || tableNumber;
+      phone = parsedNote.phone || phone;
+      paymentSlip = parsedNote.paymentSlip || paymentSlip;
+    } catch (e) {
+      // If parsing fails, it's a legacy plain-text note
+    }
+  }
+
+  const deliveryAddress = order.delivery_address || order.address || "";
+  const totalAmount = Number(order.total_amount !== undefined ? order.total_amount : (order.total || 0));
+  const timestamp = order.timestamp || order.date || new Date().toISOString();
+
+  return {
+    id: order.id,
+    orderNumber,
+    customerName: order.customer_name || "",
+    dineInType,
+    tableNumber,
+    deliveryAddress,
+    phone,
+    paymentMethod: order.payment_method || "cash",
+    paymentSlip,
+    items: order.items || [],
+    totalAmount,
+    status: order.status || "pending",
+    timestamp
+  };
 }
 
 // Helper to sync restaurant settings to Supabase
@@ -554,24 +652,45 @@ async function syncOrderToSupabase(order: Order) {
   const supabase = getSupabase();
   if (!supabase) return;
   try {
+    // Try writing to the NEW schema first (direct individual columns from copy-paste SQL)
     const { error } = await supabase.from('orders').upsert({
       id: order.id,
+      order_number: order.orderNumber,
       customer_name: order.customerName,
-      address: order.deliveryAddress || "",
+      dine_in_type: order.dineInType,
+      table_number: order.tableNumber || "",
+      delivery_address: order.deliveryAddress || "",
+      phone: order.phone || "",
       payment_method: order.paymentMethod || "cash",
+      payment_slip: order.paymentSlip || "",
       items: order.items,
-      total: order.totalAmount,
+      total_amount: order.totalAmount,
       status: order.status,
-      date: order.timestamp,
-      note: JSON.stringify({
-        orderNumber: order.orderNumber,
-        dineInType: order.dineInType,
-        tableNumber: order.tableNumber || "",
-        phone: order.phone || "",
-        paymentSlip: order.paymentSlip || ""
-      })
+      timestamp: order.timestamp
     });
-    if (error) console.error("Supabase order sync error:", error);
+
+    if (error) {
+      console.warn("Supabase new-schema order upsert failed, retrying with old schema fallback...", error);
+      // Fallback to OLD schema columns
+      const { error: oldErr } = await supabase.from('orders').upsert({
+        id: order.id,
+        customer_name: order.customerName,
+        address: order.deliveryAddress || "",
+        payment_method: order.paymentMethod || "cash",
+        items: order.items,
+        total: order.totalAmount,
+        status: order.status,
+        date: order.timestamp,
+        note: JSON.stringify({
+          orderNumber: order.orderNumber,
+          dineInType: order.dineInType,
+          tableNumber: order.tableNumber || "",
+          phone: order.phone || "",
+          paymentSlip: order.paymentSlip || ""
+        })
+      });
+      if (oldErr) console.error("Supabase old-schema order upsert also failed:", oldErr);
+    }
   } catch (e) {
     console.error("Supabase order sync failed:", e);
   }
@@ -641,23 +760,44 @@ async function syncMenuItemToSupabase(item: MenuItem) {
   const supabase = getSupabase();
   if (!supabase) return;
   try {
+    // Try writing to the NEW schema first (direct column names from the copy-paste SQL script)
     const { error } = await supabase.from('menu_items').upsert({
       id: item.id,
-      name: JSON.stringify({ th: item.nameTh, en: item.nameEn }),
-      description: JSON.stringify({
-        th: item.descriptionTh || "",
-        en: item.descriptionEn || "",
-        isPopular: item.isPopular === true,
-        prepTime: item.prepTime || 15,
-        ingredients: item.ingredients || []
-      }),
+      name_th: item.nameTh,
+      name_en: item.nameEn,
+      description_th: item.descriptionTh || "",
+      description_en: item.descriptionEn || "",
       price: item.price,
       category: item.category,
       image: item.image,
-      available: item.inStock,
-      options: item.optionGroups || []
+      is_popular: item.isPopular === true,
+      prep_time: item.prepTime || 15,
+      ingredients: item.ingredients || [],
+      in_stock: item.inStock !== false,
+      option_groups: item.optionGroups || []
     });
-    if (error) console.error("Supabase menu item sync error:", error);
+
+    if (error) {
+      console.warn("Supabase new-schema menu upsert failed, retrying with old schema fallback...", error);
+      // Fallback to OLD schema columns
+      const { error: oldErr } = await supabase.from('menu_items').upsert({
+        id: item.id,
+        name: JSON.stringify({ th: item.nameTh, en: item.nameEn }),
+        description: JSON.stringify({
+          th: item.descriptionTh || "",
+          en: item.descriptionEn || "",
+          isPopular: item.isPopular === true,
+          prepTime: item.prepTime || 15,
+          ingredients: item.ingredients || []
+        }),
+        price: item.price,
+        category: item.category,
+        image: item.image,
+        available: item.inStock,
+        options: item.optionGroups || []
+      });
+      if (oldErr) console.error("Supabase old-schema menu upsert also failed:", oldErr);
+    }
   } catch (e) {
     console.error("Supabase menu item sync failed:", e);
   }
@@ -769,55 +909,7 @@ async function initializeSupabaseData() {
     } else if (menuData && menuData.length > 0) {
       menuItems = menuData
         .filter(item => !deletedMenuItemIds.includes(item.id))
-        .map(item => {
-          let nameTh = "";
-          let nameEn = "";
-          try {
-            if (item.name) {
-              const parsedName = JSON.parse(item.name);
-              nameTh = parsedName.th || item.name;
-              nameEn = parsedName.en || item.name;
-            }
-          } catch (e) {
-            nameTh = item.name || "";
-            nameEn = item.name || "";
-          }
-
-          let descriptionTh = "";
-          let descriptionEn = "";
-          let isPopular = false;
-          let prepTime = 15;
-          let ingredients = [];
-          try {
-            if (item.description) {
-              const parsedDesc = JSON.parse(item.description);
-              descriptionTh = parsedDesc.th || item.description;
-              descriptionEn = parsedDesc.en || item.description;
-              isPopular = parsedDesc.isPopular === true;
-              prepTime = parsedDesc.prepTime || 15;
-              ingredients = parsedDesc.ingredients || [];
-            }
-          } catch (e) {
-            descriptionTh = item.description || "";
-            descriptionEn = item.description || "";
-          }
-
-          return {
-            id: item.id,
-            nameTh,
-            nameEn,
-            descriptionTh,
-            descriptionEn,
-            price: Number(item.price || 0),
-            category: item.category || "",
-            image: item.image || "",
-            isPopular,
-            prepTime,
-            ingredients,
-            inStock: item.available !== false,
-            optionGroups: item.options || []
-          };
-        });
+        .map(item => mapSupabaseMenuItem(item));
       console.log(`Loaded ${menuItems.length} menu items from Supabase.`);
     } else {
       console.log("No menu items found in Supabase. Seeding default menu items...");
@@ -836,42 +928,7 @@ async function initializeSupabaseData() {
     } else if (ordersData && ordersData.length > 0) {
       orders = ordersData
         .filter(order => !deletedOrderIds.includes(order.id))
-        .map(order => {
-          let orderNumber = order.id.replace("ORD-", "");
-          let dineInType: 'dine-in' | 'delivery' = "dine-in";
-          let tableNumber = "";
-          let phone = "";
-          let paymentSlip = "";
-          
-          try {
-            if (order.note) {
-              const parsedNote = JSON.parse(order.note);
-              orderNumber = parsedNote.orderNumber || orderNumber;
-              dineInType = parsedNote.dineInType || dineInType;
-              tableNumber = parsedNote.tableNumber || tableNumber;
-              phone = parsedNote.phone || phone;
-              paymentSlip = parsedNote.paymentSlip || paymentSlip;
-            }
-          } catch (e) {
-            // If parsing fails, it's a legacy plain-text note
-          }
-
-          return {
-            id: order.id,
-            orderNumber,
-            customerName: order.customer_name || "",
-            dineInType,
-            tableNumber,
-            deliveryAddress: order.address || "",
-            phone,
-            paymentMethod: order.payment_method || "cash",
-            paymentSlip,
-            items: order.items || [],
-            totalAmount: Number(order.total || 0),
-            status: order.status || "pending",
-            timestamp: order.date || new Date().toISOString()
-          };
-        });
+        .map(order => mapSupabaseOrder(order));
       
       const maxOrderNum = orders.reduce((max, o) => {
         const num = Number(o.orderNumber);
@@ -1022,55 +1079,7 @@ async function ensureMenuItemsLoaded() {
     if (!menuErr && menuData) {
       menuItems = menuData
         .filter(item => !deletedMenuItemIds.includes(item.id))
-        .map(item => {
-          let nameTh = "";
-          let nameEn = "";
-          try {
-            if (item.name) {
-              const parsedName = JSON.parse(item.name);
-              nameTh = parsedName.th || item.name;
-              nameEn = parsedName.en || item.name;
-            }
-          } catch (e) {
-            nameTh = item.name || "";
-            nameEn = item.name || "";
-          }
-
-          let descriptionTh = "";
-          let descriptionEn = "";
-          let isPopular = false;
-          let prepTime = 15;
-          let ingredients = [];
-          try {
-            if (item.description) {
-              const parsedDesc = JSON.parse(item.description);
-              descriptionTh = parsedDesc.th || item.description;
-              descriptionEn = parsedDesc.en || item.description;
-              isPopular = parsedDesc.isPopular === true;
-              prepTime = parsedDesc.prepTime || 15;
-              ingredients = parsedDesc.ingredients || [];
-            }
-          } catch (e) {
-            descriptionTh = item.description || "";
-            descriptionEn = item.description || "";
-          }
-
-          return {
-            id: item.id,
-            nameTh,
-            nameEn,
-            descriptionTh,
-            descriptionEn,
-            price: Number(item.price || 0),
-            category: item.category || "",
-            image: item.image || "",
-            isPopular,
-            prepTime,
-            ingredients,
-            inStock: item.available !== false,
-            optionGroups: item.options || []
-          };
-        });
+        .map(item => mapSupabaseMenuItem(item));
     }
   } catch (e) {
     console.error("Error dynamically loading menu items:", e);
@@ -1088,42 +1097,7 @@ async function ensureOrdersLoaded() {
     if (!ordersErr && ordersData) {
       orders = ordersData
         .filter(order => !deletedOrderIds.includes(order.id))
-        .map(order => {
-          let orderNumber = order.id.replace("ORD-", "");
-          let dineInType: 'dine-in' | 'delivery' = "dine-in";
-          let tableNumber = "";
-          let phone = "";
-          let paymentSlip = "";
-          
-          try {
-            if (order.note) {
-              const parsedNote = JSON.parse(order.note);
-              orderNumber = parsedNote.orderNumber || orderNumber;
-              dineInType = parsedNote.dineInType || dineInType;
-              tableNumber = parsedNote.tableNumber || tableNumber;
-              phone = parsedNote.phone || phone;
-              paymentSlip = parsedNote.paymentSlip || paymentSlip;
-            }
-          } catch (e) {
-            // If parsing fails, it's a legacy plain-text note
-          }
-
-          return {
-            id: order.id,
-            orderNumber,
-            customerName: order.customer_name || "",
-            dineInType,
-            tableNumber,
-            deliveryAddress: order.address || "",
-            phone,
-            paymentMethod: order.payment_method || "cash",
-            paymentSlip,
-            items: order.items || [],
-            totalAmount: Number(order.total || 0),
-            status: order.status || "pending",
-            timestamp: order.date || new Date().toISOString()
-          };
-        });
+        .map(order => mapSupabaseOrder(order));
       
       const maxOrderNum = orders.reduce((max, o) => {
         const num = Number(o.orderNumber);
