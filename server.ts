@@ -507,6 +507,10 @@ let deletedReservationIds: string[] = loadLocalFile("deleted_reservations.json",
 let deletedMenuItemIds: string[] = loadLocalFile("deleted_menu_items.json", []);
 let deletedCategoryIds: string[] = loadLocalFile("deleted_categories.json", []);
 
+// Track very recent local modifications to prevent database-fetch race conditions and flickering
+const localOrderUpdates = new Map<string, { timestamp: number, order: Order }>();
+const localReservationUpdates = new Map<string, { timestamp: number, reservation: Reservation }>();
+
 if (isSupabaseConfigured) {
   orders = [];
   reservations = [];
@@ -888,11 +892,6 @@ async function initializeSupabaseData() {
   }
   
   console.log("Supabase configured! Loading and seeding data...");
-  // Clear mock local orders/reservations/menuItems/categories to prevent flickering/mock items from showing up
-  orders = [];
-  reservations = [];
-  menuItems = [];
-  categories = [];
 
   try {
     // 1. Load Settings
@@ -1115,9 +1114,9 @@ async function ensureMenuItemsLoaded() {
 }
 
 let lastOrdersLoadTime = 0;
-async function ensureOrdersLoaded() {
+async function ensureOrdersLoaded(force = false) {
   const now = Date.now();
-  if (now - lastOrdersLoadTime < 2000) return;
+  if (!force && (now - lastOrdersLoadTime < 2000)) return;
   const supabase = getSupabase();
   if (!supabase) return;
   try {
@@ -1126,9 +1125,30 @@ async function ensureOrdersLoaded() {
       .select('*');
       
     if (!ordersErr && ordersData) {
-      orders = ordersData
+      const fetchedOrders = ordersData
         .filter(order => !deletedOrderIds.includes(order.id))
         .map(order => mapSupabaseOrder(order));
+      
+      const mergedOrders = fetchedOrders.map(fetched => {
+        const recent = localOrderUpdates.get(fetched.id);
+        if (recent && (Date.now() - recent.timestamp < 15000)) {
+          // If we had a local update in the last 15 seconds, prefer the local version
+          return recent.order;
+        }
+        return fetched;
+      });
+
+      // Also include any extremely recent local orders that are not in the fetched list at all yet
+      for (const [id, info] of localOrderUpdates.entries()) {
+        if (Date.now() - info.timestamp < 15000) {
+          if (!mergedOrders.some(o => o.id === id) && !deletedOrderIds.includes(id)) {
+            mergedOrders.push(info.order);
+          }
+        }
+      }
+
+      // Keep orders sorted by timestamp descending so newest is always first
+      orders = mergedOrders.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
       
       const maxOrderNum = orders.reduce((max, o) => {
         const num = Number(o.orderNumber);
@@ -1143,9 +1163,9 @@ async function ensureOrdersLoaded() {
 }
 
 let lastReservationsLoadTime = 0;
-async function ensureReservationsLoaded() {
+async function ensureReservationsLoaded(force = false) {
   const now = Date.now();
-  if (now - lastReservationsLoadTime < 2000) return;
+  if (!force && (now - lastReservationsLoadTime < 2000)) return;
   const supabase = getSupabase();
   if (!supabase) return;
   try {
@@ -1154,7 +1174,7 @@ async function ensureReservationsLoaded() {
       .select('*');
       
     if (!resErr && resData) {
-      reservations = resData
+      const fetchedReservations = resData
         .filter(resv => !deletedReservationIds.includes(resv.id))
         .map(resv => ({
           id: resv.id,
@@ -1168,6 +1188,25 @@ async function ensureReservationsLoaded() {
           status: resv.status,
           timestamp: resv.timestamp
         }));
+
+      const mergedReservations = fetchedReservations.map(fetched => {
+        const recent = localReservationUpdates.get(fetched.id);
+        if (recent && (Date.now() - recent.timestamp < 15000)) {
+          return recent.reservation;
+        }
+        return fetched;
+      });
+
+      for (const [id, info] of localReservationUpdates.entries()) {
+        if (Date.now() - info.timestamp < 15000) {
+          if (!mergedReservations.some(r => r.id === id) && !deletedReservationIds.includes(id)) {
+            mergedReservations.push(info.reservation);
+          }
+        }
+      }
+
+      // Keep reservations sorted by date/time or timestamp descending
+      reservations = mergedReservations.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
       lastReservationsLoadTime = now;
     }
   } catch (e) {
@@ -1671,7 +1710,8 @@ async function sendLineNotification(order: Order) {
 
 // GET /api/orders
 app.get("/api/orders", async (req, res) => {
-  await ensureOrdersLoaded();
+  const fresh = req.query.fresh === "true";
+  await ensureOrdersLoaded(fresh);
   res.json(orders);
 });
 
@@ -1736,6 +1776,8 @@ app.post("/api/orders", async (req, res) => {
 
   orders.unshift(newOrder); // Add to beginning of array so it appears at top
   orderCounter++;
+  localOrderUpdates.set(newOrder.id, { timestamp: Date.now(), order: newOrder });
+  lastOrdersLoadTime = 0; // Force refresh
 
   // Sync to Supabase
   await syncOrderToSupabase(newOrder).catch(e => console.error(e));
@@ -1759,6 +1801,7 @@ app.delete("/api/orders/:id", async (req, res) => {
     return res.json({ success: true, deletedId: id, note: "Order not found in memory but delete attempted on Supabase" });
   }
   orders.splice(index, 1);
+  lastOrdersLoadTime = 0; // Force refresh
   await deleteOrderFromSupabase(id).catch(e => console.error(e));
   res.json({ success: true, deletedId: id });
 });
@@ -1782,6 +1825,9 @@ app.post("/api/orders/:id/update-item-price", async (req, res) => {
 
   // Recalculate totalAmount
   order.totalAmount = order.items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+
+  localOrderUpdates.set(order.id, { timestamp: Date.now(), order: order });
+  lastOrdersLoadTime = 0; // Force refresh
 
   await syncOrderToSupabase(order).catch(e => console.error(e));
   res.json(order);
@@ -1844,6 +1890,9 @@ app.put("/api/orders/:id/items", async (req, res) => {
   order.items = processedItems;
   order.totalAmount = calculatedTotal;
 
+  localOrderUpdates.set(order.id, { timestamp: Date.now(), order: order });
+  lastOrdersLoadTime = 0; // Force refresh
+
   await syncOrderToSupabase(order).catch(e => console.error(e));
   res.json(order);
 });
@@ -1864,6 +1913,8 @@ app.post("/api/orders/:id/status", async (req, res) => {
   }
 
   order.status = status;
+  localOrderUpdates.set(order.id, { timestamp: Date.now(), order: order });
+  lastOrdersLoadTime = 0; // Force refresh
   await syncOrderToSupabase(order).catch(e => console.error(e));
   res.json(order);
 });
@@ -1999,7 +2050,8 @@ app.post("/api/settings", async (req, res) => {
 
 // GET /api/reservations - Get all reservations
 app.get("/api/reservations", async (req, res) => {
-  await ensureReservationsLoaded();
+  const fresh = req.query.fresh === "true";
+  await ensureReservationsLoaded(fresh);
   res.json(reservations);
 });
 
@@ -2025,6 +2077,8 @@ app.post("/api/reservations", async (req, res) => {
   };
 
   reservations.unshift(newRes);
+  localReservationUpdates.set(newRes.id, { timestamp: Date.now(), reservation: newRes });
+  lastReservationsLoadTime = 0; // Force refresh
   await syncReservationToSupabase(newRes).catch(e => console.error(e));
   res.status(201).json(newRes);
 });
@@ -2044,6 +2098,8 @@ app.post("/api/reservations/:id/status", async (req, res) => {
   }
 
   reservation.status = status;
+  localReservationUpdates.set(reservation.id, { timestamp: Date.now(), reservation: reservation });
+  lastReservationsLoadTime = 0; // Force refresh
   await syncReservationToSupabase(reservation).catch(e => console.error(e));
   res.json(reservation);
 });
@@ -2059,6 +2115,7 @@ app.delete("/api/reservations/:id", async (req, res) => {
     return res.json({ success: true, id, note: "Reservation not found in memory but delete attempted on Supabase" });
   }
   reservations.splice(index, 1);
+  lastReservationsLoadTime = 0; // Force refresh
   await deleteReservationFromSupabase(id).catch(e => console.error(e));
   res.json({ success: true, id });
 });

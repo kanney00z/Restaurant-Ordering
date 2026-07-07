@@ -544,7 +544,7 @@ export default function App() {
         .channel('realtime_orders')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
           console.log('Real-Time Order Update received:', payload);
-          fetchOrders();
+          fetchOrders(true);
           fetchAnalytics();
         })
         .subscribe();
@@ -554,7 +554,7 @@ export default function App() {
         .channel('realtime_reservations')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'reservations' }, (payload) => {
           console.log('Real-Time Reservation Update received:', payload);
-          fetchReservations();
+          fetchReservations(true);
         })
         .subscribe();
 
@@ -604,7 +604,10 @@ export default function App() {
       const res = await fetch('/api/menu');
       if (res.ok) {
         const data = await res.json();
-        setMenuItems(data);
+        setMenuItems(prev => {
+          if (JSON.stringify(prev) === JSON.stringify(data)) return prev;
+          return data;
+        });
       }
     } catch (err) {
       console.error("Error fetching menu:", err);
@@ -857,12 +860,16 @@ export default function App() {
     alert('เพิ่มเมนูสั่งพิเศษของคุณลงในตะกร้าแล้วค่ะ! สามารถทำการกดสั่งอาหารเพื่อส่งไปที่ห้องครัวได้เลย');
   };
 
-  const fetchOrders = async () => {
+  const fetchOrders = async (fresh = false) => {
     try {
-      const res = await fetch('/api/orders');
+      const url = fresh ? '/api/orders?fresh=true' : '/api/orders';
+      const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
-        setOrders(data);
+        setOrders(prev => {
+          if (JSON.stringify(prev) === JSON.stringify(data)) return prev;
+          return data;
+        });
       }
     } catch (err) {
       console.error("Error fetching orders:", err);
@@ -874,19 +881,26 @@ export default function App() {
       const res = await fetch('/api/analytics');
       if (res.ok) {
         const data = await res.json();
-        setAnalytics(data);
+        setAnalytics(prev => {
+          if (JSON.stringify(prev) === JSON.stringify(data)) return prev;
+          return data;
+        });
       }
     } catch (err) {
       console.error("Error fetching analytics:", err);
     }
   };
 
-  const fetchReservations = async () => {
+  const fetchReservations = async (fresh = false) => {
     try {
-      const res = await fetch('/api/reservations');
+      const url = fresh ? '/api/reservations?fresh=true' : '/api/reservations';
+      const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
-        setReservations(data);
+        setReservations(prev => {
+          if (JSON.stringify(prev) === JSON.stringify(data)) return prev;
+          return data;
+        });
       }
     } catch (err) {
       console.error("Error fetching reservations:", err);
@@ -3780,17 +3794,35 @@ create table if not exists reservations (
   updated_at timestamp with time zone default now()
 );
 
+-- 5. Create categories table
+create table if not exists categories (
+  id text primary key,
+  name_th text,
+  name_en text,
+  emoji text,
+  updated_at timestamp with time zone default now()
+);
+
 -- Enable Realtime for these tables
 alter publication supabase_realtime add table orders;
 alter publication supabase_realtime add table reservations;
 alter publication supabase_realtime add table restaurant_settings;
 alter publication supabase_realtime add table menu_items;
+alter publication supabase_realtime add table categories;
 
 -- Disable Row Level Security (RLS) to allow public read/write/delete access via client Anon Key
 alter table restaurant_settings disable row level security;
 alter table menu_items disable row level security;
 alter table orders disable row level security;
-alter table reservations disable row level security;`);
+alter table reservations disable row level security;
+alter table categories disable row level security;
+
+-- Grant full public access permissions to prevent "permission denied" errors (code 42501)
+grant all on restaurant_settings to anon, authenticated, service_role;
+grant all on menu_items to anon, authenticated, service_role;
+grant all on orders to anon, authenticated, service_role;
+grant all on reservations to anon, authenticated, service_role;
+grant all on categories to anon, authenticated, service_role;`);
                             alert('คัดลอก SQL Script เรียบร้อยแล้ว!');
                           }}
                           className="w-full bg-slate-900 hover:bg-slate-850 text-[#3ECF8E] hover:text-white border border-[#3ECF8E]/20 text-[9px] font-bold py-1 rounded transition-colors"
