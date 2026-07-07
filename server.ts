@@ -510,6 +510,8 @@ let deletedCategoryIds: string[] = loadLocalFile("deleted_categories.json", []);
 if (isSupabaseConfigured) {
   orders = [];
   reservations = [];
+  menuItems = [];
+  categories = [];
 }
 
 // --- SUPABASE PERSISTENCE & REALTIME SYNC ---
@@ -886,9 +888,11 @@ async function initializeSupabaseData() {
   }
   
   console.log("Supabase configured! Loading and seeding data...");
-  // Clear mock local orders/reservations to prevent flickering/mock orders from showing up
+  // Clear mock local orders/reservations/menuItems/categories to prevent flickering/mock items from showing up
   orders = [];
   reservations = [];
+  menuItems = [];
+  categories = [];
 
   try {
     // 1. Load Settings
@@ -938,10 +942,8 @@ async function initializeSupabaseData() {
         .map(item => mapSupabaseMenuItem(item));
       console.log(`Loaded ${menuItems.length} menu items from Supabase.`);
     } else {
-      console.log("No menu items found in Supabase. Seeding default menu items...");
-      for (const item of menuItems) {
-        await syncMenuItemToSupabase(item);
-      }
+      console.log("No menu items found in Supabase. Skipping auto-seeding to prevent infinite loops.");
+      menuItems = [];
     }
 
     // 3. Load Orders
@@ -1008,10 +1010,8 @@ async function initializeSupabaseData() {
           }));
         console.log(`Loaded ${categories.length} categories from Supabase.`);
       } else {
-        console.log("No categories found in Supabase. Seeding default categories...");
-        for (const cat of categories) {
-          await syncCategoryToSupabase(cat);
-        }
+        console.log("No categories found in Supabase. Skipping auto-seeding to prevent infinite loops.");
+        categories = [];
       }
     } catch (e) {
       // Table may not exist yet, which is fine
