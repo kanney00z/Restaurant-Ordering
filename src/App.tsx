@@ -527,7 +527,13 @@ export default function App() {
   useEffect(() => {
     const url = settings.supabaseUrl?.trim() || (import.meta as any).env.VITE_SUPABASE_URL?.trim();
     const key = settings.supabaseAnonKey?.trim() || (import.meta as any).env.VITE_SUPABASE_ANON_KEY?.trim();
-    if (!url || !key || url === 'YOUR_SUPABASE_URL_HERE' || key === 'YOUR_SUPABASE_ANON_KEY_HERE') return;
+    
+    console.log('[Supabase Real-time] Checking config:', { url, key });
+
+    if (!url || typeof url !== 'string' || !url.startsWith('http') || !key || url === 'YOUR_SUPABASE_URL_HERE' || key === 'YOUR_SUPABASE_ANON_KEY_HERE') {
+      console.log('[Supabase Real-time] Skipping connection: Config is incomplete or invalid.');
+      return;
+    }
 
     try {
       console.log('Connecting to Supabase Real-time:', url);
