@@ -158,6 +158,11 @@ let restaurantSettings: RestaurantSettings = loadLocalFile("restaurant_settings.
   supabaseAnonKey: process.env.VITE_SUPABASE_ANON_KEY || ""
 });
 
+const isSupabaseConfigured = !!(
+  (restaurantSettings.supabaseUrl?.trim() && restaurantSettings.supabaseUrl !== "YOUR_SUPABASE_URL_HERE") ||
+  (process.env.VITE_SUPABASE_URL?.trim() && process.env.VITE_SUPABASE_URL !== "YOUR_SUPABASE_URL_HERE")
+);
+
 // Initial Menu Seed Data
 let menuItems: MenuItem[] = loadLocalFile("menu_items.json", [
   {
@@ -501,6 +506,11 @@ let deletedOrderIds: string[] = loadLocalFile("deleted_orders.json", []);
 let deletedReservationIds: string[] = loadLocalFile("deleted_reservations.json", []);
 let deletedMenuItemIds: string[] = loadLocalFile("deleted_menu_items.json", []);
 let deletedCategoryIds: string[] = loadLocalFile("deleted_categories.json", []);
+
+if (isSupabaseConfigured) {
+  orders = [];
+  reservations = [];
+}
 
 // --- SUPABASE PERSISTENCE & REALTIME SYNC ---
 
@@ -876,6 +886,10 @@ async function initializeSupabaseData() {
   }
   
   console.log("Supabase configured! Loading and seeding data...");
+  // Clear mock local orders/reservations to prevent flickering/mock orders from showing up
+  orders = [];
+  reservations = [];
+
   try {
     // 1. Load Settings
     const { data: settingsData, error: settingsErr } = await supabase
@@ -937,8 +951,8 @@ async function initializeSupabaseData() {
       
     if (ordersErr) {
       console.error("Error loading orders from Supabase:", ordersErr);
-    } else if (ordersData && ordersData.length > 0) {
-      orders = ordersData
+    } else {
+      orders = (ordersData || [])
         .filter(order => !deletedOrderIds.includes(order.id))
         .map(order => mapSupabaseOrder(order));
       
@@ -948,11 +962,6 @@ async function initializeSupabaseData() {
       }, 1003);
       orderCounter = maxOrderNum + 1;
       console.log(`Loaded ${orders.length} orders from Supabase. Next OrderCounter: ${orderCounter}`);
-    } else {
-      console.log("No orders found in Supabase. Seeding default orders...");
-      for (const order of orders) {
-        await syncOrderToSupabase(order);
-      }
     }
 
     // 4. Load Reservations
@@ -962,8 +971,8 @@ async function initializeSupabaseData() {
       
     if (resErr) {
       console.error("Error loading reservations from Supabase:", resErr);
-    } else if (resData && resData.length > 0) {
-      reservations = resData
+    } else {
+      reservations = (resData || [])
         .filter(resv => !deletedReservationIds.includes(resv.id))
         .map(resv => ({
           id: resv.id,
@@ -978,11 +987,6 @@ async function initializeSupabaseData() {
           timestamp: resv.timestamp
         }));
       console.log(`Loaded ${reservations.length} reservations from Supabase.`);
-    } else {
-      console.log("No reservations found in Supabase. Seeding default reservations...");
-      for (const resv of reservations) {
-        await syncReservationToSupabase(resv);
-      }
     }
 
     // 5. Load Categories
