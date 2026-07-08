@@ -514,11 +514,20 @@ export default function App() {
       setIsScannedTable(false);
     }
     
-    // Auto-refresh orders every 2 seconds in the background to emulate live updates
+    // Auto-refresh orders, reservations and other state in the background to emulate live updates and provide robust multi-device sync
+    let tickCount = 0;
     const timer = setInterval(() => {
+      tickCount++;
       fetchOrders();
       fetchAnalytics();
       fetchReservations();
+      
+      // Every 8 seconds, sync categories, menu items, and settings to make sure all screens match even without WebSockets
+      if (tickCount % 4 === 0) {
+        fetchMenu();
+        fetchCategories();
+        fetchSettings();
+      }
     }, 2000);
     return () => clearInterval(timer);
   }, []);
@@ -587,61 +596,66 @@ export default function App() {
     }
   }, [settings.supabaseUrl, settings.supabaseAnonKey]);
 
-  // Native WebSocket Real-Time Sync
+  // Native WebSocket Real-Time Sync with robust, quiet error handling and background polling fallback
   useEffect(() => {
     let ws: WebSocket | null = null;
     let reconnectTimeout: any = null;
     let pingInterval: any = null;
 
     function connect() {
+      // Use the correct protocol and safely connect
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const wsUrl = `${protocol}//${window.location.host}`;
-      console.log('[WebSocket] Connecting to:', wsUrl);
+      console.log('[WebSocket] Initiating connection...');
       
-      ws = new WebSocket(wsUrl);
+      try {
+        ws = new WebSocket(wsUrl);
 
-      ws.onopen = () => {
-        console.log('[WebSocket] Connected successfully.');
-        // Set up ping interval to keep connection alive
-        pingInterval = setInterval(() => {
-          if (ws?.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: 'ping' }));
+        ws.onopen = () => {
+          console.log('[WebSocket] Connected successfully.');
+          // Set up ping interval to keep connection alive
+          pingInterval = setInterval(() => {
+            if (ws?.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: 'ping' }));
+            }
+          }, 30000);
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            
+            if (data.type === 'orders-updated') {
+              fetchOrders(true);
+              fetchAnalytics();
+            } else if (data.type === 'reservations-updated') {
+              fetchReservations(true);
+            } else if (data.type === 'menu-updated') {
+              fetchMenu();
+            } else if (data.type === 'categories-updated') {
+              fetchCategories();
+            } else if (data.type === 'settings-updated') {
+              fetchSettings();
+            }
+          } catch (err) {
+            // Quiet debug catch
           }
-        }, 30000);
-      };
+        };
 
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          console.log('[WebSocket] Message received:', data);
-          
-          if (data.type === 'orders-updated') {
-            fetchOrders(true);
-            fetchAnalytics();
-          } else if (data.type === 'reservations-updated') {
-            fetchReservations(true);
-          } else if (data.type === 'menu-updated') {
-            fetchMenu();
-          } else if (data.type === 'categories-updated') {
-            fetchCategories();
-          } else if (data.type === 'settings-updated') {
-            fetchSettings();
-          }
-        } catch (err) {
-          console.error('[WebSocket] Error parsing message:', err);
-        }
-      };
+        ws.onclose = () => {
+          // Reconnect quietly in 5 seconds
+          cleanup();
+          reconnectTimeout = setTimeout(connect, 5000);
+        };
 
-      ws.onclose = () => {
-        console.log('[WebSocket] Connection closed. Retrying in 3 seconds...');
-        cleanup();
-        reconnectTimeout = setTimeout(connect, 3000);
-      };
-
-      ws.onerror = (err) => {
-        console.error('[WebSocket] Connection error:', err);
-        ws?.close();
-      };
+        ws.onerror = () => {
+          // Quietly close on connection error to trigger onclose and let robust background polling handle sync
+          ws?.close();
+        };
+      } catch (err) {
+        // Safe catch-all for any instant initialization failures in restrictive iframe sandboxes
+        reconnectTimeout = setTimeout(connect, 5000);
+      }
     }
 
     function cleanup() {
