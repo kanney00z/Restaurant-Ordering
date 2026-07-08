@@ -1050,16 +1050,9 @@ async function initializeSupabaseData() {
         .filter(item => !deletedMenuItemIds.includes(item.id))
         .map(item => mapSupabaseMenuItem(item));
         
-      const mergedItems = [...fetchedItems];
-      const existingItemsMap = new Map(menuItems.map(item => [item.id, item]));
-      for (const [id, item] of existingItemsMap.entries()) {
-        if (!mergedItems.some(m => m.id === id) && !deletedMenuItemIds.includes(id)) {
-          mergedItems.push(item);
-        }
-      }
-      menuItems = mergedItems;
+      menuItems = fetchedItems;
       saveLocalFile("menu_items.json", menuItems);
-      console.log(`Loaded and merged ${menuItems.length} menu items.`);
+      console.log(`Loaded ${menuItems.length} menu items from Supabase.`);
     }
 
     // 3. Load Orders
@@ -1074,14 +1067,7 @@ async function initializeSupabaseData() {
         .filter(order => !deletedOrderIds.includes(order.id))
         .map(order => mapSupabaseOrder(order));
         
-      const mergedOrders = [...fetchedOrders];
-      const existingOrdersMap = new Map(orders.map(o => [o.id, o]));
-      for (const [id, order] of existingOrdersMap.entries()) {
-        if (!mergedOrders.some(o => o.id === id) && !deletedOrderIds.includes(id)) {
-          mergedOrders.push(order);
-        }
-      }
-      orders = mergedOrders.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      orders = fetchedOrders.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
       
       const maxOrderNum = orders.reduce((max, o) => {
         const num = Number(o.orderNumber);
@@ -1091,7 +1077,7 @@ async function initializeSupabaseData() {
       
       saveLocalFile("orders.json", orders);
       saveLocalFile("order_counter.json", orderCounter);
-      console.log(`Loaded and merged ${orders.length} orders. Next OrderCounter: ${orderCounter}`);
+      console.log(`Loaded ${orders.length} orders from Supabase. Next OrderCounter: ${orderCounter}`);
     }
 
     // 4. Load Reservations
@@ -1117,17 +1103,10 @@ async function initializeSupabaseData() {
           timestamp: resv.timestamp
         }));
         
-      const mergedReservations = [...fetchedReservations];
-      const existingReservationsMap = new Map(reservations.map(r => [r.id, r]));
-      for (const [id, resv] of existingReservationsMap.entries()) {
-        if (!mergedReservations.some(r => r.id === id) && !deletedReservationIds.includes(id)) {
-          mergedReservations.push(resv);
-        }
-      }
-      reservations = mergedReservations.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      reservations = fetchedReservations.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
       
       saveLocalFile("reservations.json", reservations);
-      console.log(`Loaded and merged ${reservations.length} reservations.`);
+      console.log(`Loaded ${reservations.length} reservations from Supabase.`);
     }
 
     // 5. Load Categories
@@ -1148,16 +1127,9 @@ async function initializeSupabaseData() {
             emoji: c.emoji || "🍽️"
           }));
           
-        const mergedCats = [...fetchedCats];
-        const existingCatsMap = new Map(categories.map(c => [c.id, c]));
-        for (const [id, cat] of existingCatsMap.entries()) {
-          if (!mergedCats.some(c => c.id === id) && !deletedCategoryIds.includes(id)) {
-            mergedCats.push(cat);
-          }
-        }
-        categories = mergedCats;
+        categories = fetchedCats;
         saveLocalFile("categories.json", categories);
-        console.log(`Loaded and merged ${categories.length} categories.`);
+        console.log(`Loaded ${categories.length} categories from Supabase.`);
       }
     } catch (e) {
       // Table may not exist yet, which is fine
@@ -1233,18 +1205,7 @@ async function ensureCategoriesLoaded() {
           emoji: c.emoji || "🍽️"
         }));
 
-      // ROBUST LOCAL FALLBACK MERGING:
-      // If there are existing local categories that are NOT in the fetched Supabase list
-      // and have NOT been explicitly deleted, we MUST keep them! This guarantees that even if
-      // Supabase is empty, slow, or has an error/RLS blocking the fetch, categories are NEVER lost!
-      const mergedCats = [...fetchedCats];
-      const existingCatsMap = new Map(categories.map(c => [c.id, c]));
-      for (const [id, cat] of existingCatsMap.entries()) {
-        if (!mergedCats.some(c => c.id === id) && !deletedCategoryIds.includes(id)) {
-          mergedCats.push(cat);
-        }
-      }
-      categories = mergedCats;
+      categories = fetchedCats;
       lastCategoriesLoadTime = now;
     }
   } catch (e) {
@@ -1268,18 +1229,7 @@ async function ensureMenuItemsLoaded() {
         .filter(item => !deletedMenuItemIds.includes(item.id))
         .map(item => mapSupabaseMenuItem(item));
 
-      // ROBUST LOCAL FALLBACK MERGING:
-      // If there are existing local menu items that are NOT in the fetched Supabase list
-      // and have NOT been explicitly deleted, we MUST keep them! This guarantees that even if
-      // Supabase is empty, slow, or has an error/RLS blocking the fetch, menu items are NEVER lost!
-      const mergedItems = [...fetchedItems];
-      const existingItemsMap = new Map(menuItems.map(item => [item.id, item]));
-      for (const [id, item] of existingItemsMap.entries()) {
-        if (!mergedItems.some(m => m.id === id) && !deletedMenuItemIds.includes(id)) {
-          mergedItems.push(item);
-        }
-      }
-      menuItems = mergedItems;
+      menuItems = fetchedItems;
       lastMenuLoadTime = now;
     }
   } catch (e) {
@@ -1318,17 +1268,6 @@ async function ensureOrdersLoaded(force = false) {
           if (!mergedOrders.some(o => o.id === id) && !deletedOrderIds.includes(id)) {
             mergedOrders.push(info.order);
           }
-        }
-      }
-
-      // ROBUST LOCAL FALLBACK MERGING:
-      // If there are existing in-memory/local orders that are NOT in the fetched Supabase list
-      // and have NOT been explicitly deleted, we MUST keep them! This guarantees that even if
-      // Supabase is empty, slow, or has an error/RLS blocking the fetch, orders are NEVER lost!
-      const existingOrdersMap = new Map(orders.map(o => [o.id, o]));
-      for (const [id, order] of existingOrdersMap.entries()) {
-        if (!mergedOrders.some(o => o.id === id) && !deletedOrderIds.includes(id)) {
-          mergedOrders.push(order);
         }
       }
 
@@ -1392,17 +1331,6 @@ async function ensureReservationsLoaded(force = false) {
           if (!mergedReservations.some(r => r.id === id) && !deletedReservationIds.includes(id)) {
             mergedReservations.push(info.reservation);
           }
-        }
-      }
-
-      // ROBUST LOCAL FALLBACK MERGING:
-      // If there are existing in-memory/local reservations that are NOT in the fetched Supabase list
-      // and have NOT been explicitly deleted, we MUST keep them! This guarantees that even if
-      // Supabase is empty, slow, or has an error/RLS blocking the fetch, reservations are NEVER lost!
-      const existingReservationsMap = new Map(reservations.map(r => [r.id, r]));
-      for (const [id, resv] of existingReservationsMap.entries()) {
-        if (!mergedReservations.some(r => r.id === id) && !deletedReservationIds.includes(id)) {
-          mergedReservations.push(resv);
         }
       }
 
