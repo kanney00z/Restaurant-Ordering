@@ -598,21 +598,34 @@ export default function App() {
 
   // Native WebSocket Real-Time Sync with robust, quiet error handling and background polling fallback
   useEffect(() => {
+    // Vercel Serverless environment does not support persistent WebSockets, so we use polling
+    if (window.location.hostname.includes('vercel.app')) {
+      console.log('[Real-time] Vercel environment detected. Using high-performance 2-second background polling for sync.');
+      return;
+    }
+
     let ws: WebSocket | null = null;
     let reconnectTimeout: any = null;
     let pingInterval: any = null;
+    let retryCount = 0;
+    const MAX_RETRIES = 3;
 
     function connect() {
-      // Use the correct protocol and safely connect
+      if (retryCount >= MAX_RETRIES) {
+        console.log('[Real-time] WebSocket connection could not be established. Switched to high-performance background polling.');
+        return;
+      }
+
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const wsUrl = `${protocol}//${window.location.host}`;
-      console.log('[WebSocket] Initiating connection...');
+      console.log(`[WebSocket] Connecting (Attempt ${retryCount + 1}/${MAX_RETRIES})...`);
       
       try {
         ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
           console.log('[WebSocket] Connected successfully.');
+          retryCount = 0; // Reset count on success
           // Set up ping interval to keep connection alive
           pingInterval = setInterval(() => {
             if (ws?.readyState === WebSocket.OPEN) {
@@ -643,18 +656,24 @@ export default function App() {
         };
 
         ws.onclose = () => {
-          // Reconnect quietly in 5 seconds
           cleanup();
-          reconnectTimeout = setTimeout(connect, 5000);
+          retryCount++;
+          if (retryCount < MAX_RETRIES) {
+            reconnectTimeout = setTimeout(connect, 10000); // 10 seconds backoff
+          } else {
+            console.log('[Real-time] WebSocket disconnected. Running on robust background polling.');
+          }
         };
 
         ws.onerror = () => {
-          // Quietly close on connection error to trigger onclose and let robust background polling handle sync
           ws?.close();
         };
       } catch (err) {
-        // Safe catch-all for any instant initialization failures in restrictive iframe sandboxes
-        reconnectTimeout = setTimeout(connect, 5000);
+        cleanup();
+        retryCount++;
+        if (retryCount < MAX_RETRIES) {
+          reconnectTimeout = setTimeout(connect, 10000);
+        }
       }
     }
 
