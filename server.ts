@@ -4,11 +4,56 @@ import { GoogleGenAI } from "@google/genai";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import fs from "fs";
+import { WebSocketServer, WebSocket } from "ws";
 
 dotenv.config();
 
 const app = express();
 const PORT = 3000;
+
+let wss: WebSocketServer | null = null;
+
+function setupWebSocket(server: any) {
+  wss = new WebSocketServer({ server });
+  console.log("WebSocket server attached successfully.");
+
+  wss.on("connection", (ws: WebSocket) => {
+    console.log("New WebSocket connection established.");
+    
+    ws.on("message", (message: string) => {
+      try {
+        const data = JSON.parse(message);
+        if (data.type === "ping") {
+          ws.send(JSON.stringify({ type: "pong" }));
+        }
+      } catch (err) {
+        // ignore
+      }
+    });
+
+    ws.on("error", (error) => {
+      console.error("WebSocket connection error:", error);
+    });
+
+    ws.on("close", () => {
+      console.log("WebSocket connection closed.");
+    });
+  });
+}
+
+function broadcast(type: string, payload?: any) {
+  if (!wss) return;
+  const message = JSON.stringify({ type, payload });
+  wss.clients.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) {
+      try {
+        client.send(message);
+      } catch (err) {
+        console.error("Error sending WebSocket broadcast:", err);
+      }
+    }
+  });
+}
 
 // Middleware
 app.use(express.json({ limit: '50mb' }));
@@ -163,8 +208,14 @@ const isSupabaseConfigured = !!(
   (process.env.VITE_SUPABASE_URL?.trim() && process.env.VITE_SUPABASE_URL !== "YOUR_SUPABASE_URL_HERE")
 );
 
-// Initial Menu Seed Data
-let menuItems: MenuItem[] = loadLocalFile("menu_items.json", [
+// Load Tracking Lists for Deleted Items First
+let deletedOrderIds: string[] = loadLocalFile("deleted_orders.json", []);
+let deletedReservationIds: string[] = loadLocalFile("deleted_reservations.json", []);
+let deletedMenuItemIds: string[] = loadLocalFile("deleted_menu_items.json", []);
+let deletedCategoryIds: string[] = loadLocalFile("deleted_categories.json", []);
+
+// Default Seed Constants to fallback on if database or files are empty
+const DEFAULT_MENU_ITEMS: MenuItem[] = [
   {
     id: "A1",
     nameTh: "มันฝรั่งทอดคลุกทรัฟเฟิล",
@@ -401,18 +452,16 @@ let menuItems: MenuItem[] = loadLocalFile("menu_items.json", [
     ingredients: ["Butterfly Pea Flower", "Honey", "Lemon", "Soda"],
     inStock: true
   }
-]);
+];
 
-// Active Categories State (with pre-seeded options)
-let categories: Category[] = loadLocalFile("categories.json", [
+const DEFAULT_CATEGORIES: Category[] = [
   { id: "appetizer", nameTh: "อาหารเรียกน้ำย่อย", nameEn: "Appetizers", emoji: "🥗" },
   { id: "main", nameTh: "อาหารจานหลัก", nameEn: "Mains", emoji: "🥩" },
   { id: "dessert", nameTh: "ของหวาน", nameEn: "Desserts", emoji: "🍨" },
   { id: "beverage", nameTh: "เครื่องดื่ม", nameEn: "Beverages", emoji: "🍹" }
-]);
+];
 
-// Initial Orders Seed Data (to make the admin dashboard look active and ready instantly)
-let orders: Order[] = loadLocalFile("orders.json", [
+const DEFAULT_ORDERS: Order[] = [
   {
     id: "ORD-1001",
     orderNumber: "1001",
@@ -426,7 +475,7 @@ let orders: Order[] = loadLocalFile("orders.json", [
     ],
     totalAmount: 1870,
     status: "completed",
-    timestamp: new Date(Date.now() - 3600000 * 2.5).toISOString() // 2.5 hours ago
+    timestamp: new Date(Date.now() - 3600000 * 2.5).toISOString()
   },
   {
     id: "ORD-1002",
@@ -441,7 +490,7 @@ let orders: Order[] = loadLocalFile("orders.json", [
     ],
     totalAmount: 940,
     status: "preparing",
-    timestamp: new Date(Date.now() - 3600000 * 0.4).toISOString() // 24 mins ago
+    timestamp: new Date(Date.now() - 3600000 * 0.4).toISOString()
   },
   {
     id: "ORD-1003",
@@ -456,9 +505,9 @@ let orders: Order[] = loadLocalFile("orders.json", [
     ],
     totalAmount: 870,
     status: "pending",
-    timestamp: new Date(Date.now() - 60000 * 5).toISOString() // 5 mins ago
+    timestamp: new Date(Date.now() - 60000 * 5).toISOString()
   }
-]);
+];
 
 export interface Reservation {
   id: string;
@@ -473,7 +522,7 @@ export interface Reservation {
   timestamp: string;
 }
 
-let reservations: Reservation[] = loadLocalFile("reservations.json", [
+const DEFAULT_RESERVATIONS: Reservation[] = [
   {
     id: "RES-2001",
     customerName: "คุณวิภาวี",
@@ -498,14 +547,30 @@ let reservations: Reservation[] = loadLocalFile("reservations.json", [
     status: "pending",
     timestamp: new Date().toISOString()
   }
-]);
+];
+
+// Initialize and restore seed data if the local files exist but are empty arrays
+let menuItems: MenuItem[] = loadLocalFile("menu_items.json", DEFAULT_MENU_ITEMS);
+if (!Array.isArray(menuItems) || (menuItems.length === 0 && deletedMenuItemIds.length === 0)) {
+  menuItems = [...DEFAULT_MENU_ITEMS];
+}
+
+let categories: Category[] = loadLocalFile("categories.json", DEFAULT_CATEGORIES);
+if (!Array.isArray(categories) || (categories.length === 0 && deletedCategoryIds.length === 0)) {
+  categories = [...DEFAULT_CATEGORIES];
+}
+
+let orders: Order[] = loadLocalFile("orders.json", DEFAULT_ORDERS);
+if (!Array.isArray(orders) || (orders.length === 0 && deletedOrderIds.length === 0)) {
+  orders = [...DEFAULT_ORDERS];
+}
+
+let reservations: Reservation[] = loadLocalFile("reservations.json", DEFAULT_RESERVATIONS);
+if (!Array.isArray(reservations) || (reservations.length === 0 && deletedReservationIds.length === 0)) {
+  reservations = [...DEFAULT_RESERVATIONS];
+}
 
 let orderCounter = loadLocalFile("order_counter.json", 1004);
-
-let deletedOrderIds: string[] = loadLocalFile("deleted_orders.json", []);
-let deletedReservationIds: string[] = loadLocalFile("deleted_reservations.json", []);
-let deletedMenuItemIds: string[] = loadLocalFile("deleted_menu_items.json", []);
-let deletedCategoryIds: string[] = loadLocalFile("deleted_categories.json", []);
 
 // Track very recent local modifications to prevent database-fetch race conditions and flickering
 const localOrderUpdates = new Map<string, { timestamp: number, order: Order }>();
@@ -932,14 +997,21 @@ async function initializeSupabaseData() {
       
     if (menuErr) {
       console.error("Error loading menu from Supabase:", menuErr);
-    } else if (menuData && menuData.length > 0) {
-      menuItems = menuData
+    } else {
+      const fetchedItems = (menuData || [])
         .filter(item => !deletedMenuItemIds.includes(item.id))
         .map(item => mapSupabaseMenuItem(item));
-      console.log(`Loaded ${menuItems.length} menu items from Supabase.`);
-    } else {
-      console.log("No menu items found in Supabase. Skipping auto-seeding to prevent infinite loops.");
-      menuItems = [];
+        
+      const mergedItems = [...fetchedItems];
+      const existingItemsMap = new Map(menuItems.map(item => [item.id, item]));
+      for (const [id, item] of existingItemsMap.entries()) {
+        if (!mergedItems.some(m => m.id === id) && !deletedMenuItemIds.includes(id)) {
+          mergedItems.push(item);
+        }
+      }
+      menuItems = mergedItems;
+      saveLocalFile("menu_items.json", menuItems);
+      console.log(`Loaded and merged ${menuItems.length} menu items.`);
     }
 
     // 3. Load Orders
@@ -950,16 +1022,28 @@ async function initializeSupabaseData() {
     if (ordersErr) {
       console.error("Error loading orders from Supabase:", ordersErr);
     } else {
-      orders = (ordersData || [])
+      const fetchedOrders = (ordersData || [])
         .filter(order => !deletedOrderIds.includes(order.id))
         .map(order => mapSupabaseOrder(order));
+        
+      const mergedOrders = [...fetchedOrders];
+      const existingOrdersMap = new Map(orders.map(o => [o.id, o]));
+      for (const [id, order] of existingOrdersMap.entries()) {
+        if (!mergedOrders.some(o => o.id === id) && !deletedOrderIds.includes(id)) {
+          mergedOrders.push(order);
+        }
+      }
+      orders = mergedOrders.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
       
       const maxOrderNum = orders.reduce((max, o) => {
         const num = Number(o.orderNumber);
         return isNaN(num) ? max : Math.max(max, num);
       }, 1003);
       orderCounter = maxOrderNum + 1;
-      console.log(`Loaded ${orders.length} orders from Supabase. Next OrderCounter: ${orderCounter}`);
+      
+      saveLocalFile("orders.json", orders);
+      saveLocalFile("order_counter.json", orderCounter);
+      console.log(`Loaded and merged ${orders.length} orders. Next OrderCounter: ${orderCounter}`);
     }
 
     // 4. Load Reservations
@@ -970,7 +1054,7 @@ async function initializeSupabaseData() {
     if (resErr) {
       console.error("Error loading reservations from Supabase:", resErr);
     } else {
-      reservations = (resData || [])
+      const fetchedReservations = (resData || [])
         .filter(resv => !deletedReservationIds.includes(resv.id))
         .map(resv => ({
           id: resv.id,
@@ -984,7 +1068,18 @@ async function initializeSupabaseData() {
           status: resv.status,
           timestamp: resv.timestamp
         }));
-      console.log(`Loaded ${reservations.length} reservations from Supabase.`);
+        
+      const mergedReservations = [...fetchedReservations];
+      const existingReservationsMap = new Map(reservations.map(r => [r.id, r]));
+      for (const [id, resv] of existingReservationsMap.entries()) {
+        if (!mergedReservations.some(r => r.id === id) && !deletedReservationIds.includes(id)) {
+          mergedReservations.push(resv);
+        }
+      }
+      reservations = mergedReservations.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      
+      saveLocalFile("reservations.json", reservations);
+      console.log(`Loaded and merged ${reservations.length} reservations.`);
     }
 
     // 5. Load Categories
@@ -995,8 +1090,8 @@ async function initializeSupabaseData() {
         
       if (catErr) {
         console.error("Error loading categories from Supabase:", catErr);
-      } else if (catData && catData.length > 0) {
-        categories = catData
+      } else {
+        const fetchedCats = (catData || [])
           .filter(c => !deletedCategoryIds.includes(c.id))
           .map(c => ({
             id: c.id,
@@ -1004,10 +1099,17 @@ async function initializeSupabaseData() {
             nameEn: c.name_en,
             emoji: c.emoji || "🍽️"
           }));
-        console.log(`Loaded ${categories.length} categories from Supabase.`);
-      } else {
-        console.log("No categories found in Supabase. Skipping auto-seeding to prevent infinite loops.");
-        categories = [];
+          
+        const mergedCats = [...fetchedCats];
+        const existingCatsMap = new Map(categories.map(c => [c.id, c]));
+        for (const [id, cat] of existingCatsMap.entries()) {
+          if (!mergedCats.some(c => c.id === id) && !deletedCategoryIds.includes(id)) {
+            mergedCats.push(cat);
+          }
+        }
+        categories = mergedCats;
+        saveLocalFile("categories.json", categories);
+        console.log(`Loaded and merged ${categories.length} categories.`);
       }
     } catch (e) {
       // Table may not exist yet, which is fine
@@ -1329,6 +1431,7 @@ app.post("/api/categories", async (req, res) => {
 
   categories.push(newCategory);
   await syncCategoryToSupabase(newCategory).catch(e => console.error(e));
+  broadcast("categories-updated");
   res.status(201).json(newCategory);
 });
 
@@ -1360,6 +1463,8 @@ app.delete("/api/categories/:id", async (req, res) => {
     await syncCategoryToSupabase(otherCat).catch(e => console.error(e));
   }
 
+  broadcast("categories-updated");
+  broadcast("menu-updated");
   res.json({ success: true, deletedId: id });
 });
 
@@ -1388,6 +1493,7 @@ app.post("/api/menu", async (req, res) => {
 
   menuItems.push(newItem);
   await syncMenuItemToSupabase(newItem).catch(e => console.error(e));
+  broadcast("menu-updated");
   res.status(201).json(newItem);
 });
 
@@ -1407,6 +1513,7 @@ app.put("/api/menu/:id", async (req, res) => {
   };
 
   await syncMenuItemToSupabase(menuItems[index]).catch(e => console.error(e));
+  broadcast("menu-updated");
   res.json(menuItems[index]);
 });
 
@@ -1418,11 +1525,13 @@ app.delete("/api/menu/:id", async (req, res) => {
   if (index === -1) {
     // Attempt deletion from Supabase to be safe and idempotent, returning success instead of 404
     await deleteMenuItemFromSupabase(id).catch(e => console.error(e));
+    broadcast("menu-updated");
     return res.json({ success: true, deletedId: id, note: "Menu item not found in memory but delete attempted on Supabase" });
   }
   
   menuItems.splice(index, 1);
   await deleteMenuItemFromSupabase(id).catch(e => console.error(e));
+  broadcast("menu-updated");
   res.json({ success: true, deletedId: id });
 });
 
@@ -1436,6 +1545,7 @@ app.post("/api/menu/:id/toggle-stock", async (req, res) => {
   }
   item.inStock = !item.inStock;
   await syncMenuItemToSupabase(item).catch(e => console.error(e));
+  broadcast("menu-updated");
   res.json({ id: item.id, inStock: item.inStock });
 });
 
@@ -1841,6 +1951,8 @@ app.post("/api/orders", async (req, res) => {
     console.error("Error sending LINE notification asynchronously:", err);
   });
 
+  broadcast("orders-updated");
+
   res.status(201).json(newOrder);
 });
 
@@ -1852,11 +1964,13 @@ app.delete("/api/orders/:id", async (req, res) => {
   if (index === -1) {
     // Attempt deletion from Supabase to be safe and idempotent, returning success instead of 404
     await deleteOrderFromSupabase(id).catch(e => console.error(e));
+    broadcast("orders-updated");
     return res.json({ success: true, deletedId: id, note: "Order not found in memory but delete attempted on Supabase" });
   }
   orders.splice(index, 1);
   lastOrdersLoadTime = 0; // Force refresh
   await deleteOrderFromSupabase(id).catch(e => console.error(e));
+  broadcast("orders-updated");
   res.json({ success: true, deletedId: id });
 });
 
@@ -1884,6 +1998,7 @@ app.post("/api/orders/:id/update-item-price", async (req, res) => {
   lastOrdersLoadTime = 0; // Force refresh
 
   await syncOrderToSupabase(order).catch(e => console.error(e));
+  broadcast("orders-updated");
   res.json(order);
 });
 
@@ -1948,6 +2063,7 @@ app.put("/api/orders/:id/items", async (req, res) => {
   lastOrdersLoadTime = 0; // Force refresh
 
   await syncOrderToSupabase(order).catch(e => console.error(e));
+  broadcast("orders-updated");
   res.json(order);
 });
 
@@ -1970,6 +2086,7 @@ app.post("/api/orders/:id/status", async (req, res) => {
   localOrderUpdates.set(order.id, { timestamp: Date.now(), order: order });
   lastOrdersLoadTime = 0; // Force refresh
   await syncOrderToSupabase(order).catch(e => console.error(e));
+  broadcast("orders-updated");
   res.json(order);
 });
 
@@ -2099,6 +2216,8 @@ app.post("/api/settings", async (req, res) => {
     }, 100);
   }
 
+  broadcast("settings-updated");
+
   res.json(restaurantSettings);
 });
 
@@ -2134,6 +2253,7 @@ app.post("/api/reservations", async (req, res) => {
   localReservationUpdates.set(newRes.id, { timestamp: Date.now(), reservation: newRes });
   lastReservationsLoadTime = 0; // Force refresh
   await syncReservationToSupabase(newRes).catch(e => console.error(e));
+  broadcast("reservations-updated");
   res.status(201).json(newRes);
 });
 
@@ -2155,6 +2275,7 @@ app.post("/api/reservations/:id/status", async (req, res) => {
   localReservationUpdates.set(reservation.id, { timestamp: Date.now(), reservation: reservation });
   lastReservationsLoadTime = 0; // Force refresh
   await syncReservationToSupabase(reservation).catch(e => console.error(e));
+  broadcast("reservations-updated");
   res.json(reservation);
 });
 
@@ -2166,11 +2287,13 @@ app.delete("/api/reservations/:id", async (req, res) => {
   if (index === -1) {
     // Attempt deletion from Supabase to be safe and idempotent, returning success instead of 404
     await deleteReservationFromSupabase(id).catch(e => console.error(e));
+    broadcast("reservations-updated");
     return res.json({ success: true, id, note: "Reservation not found in memory but delete attempted on Supabase" });
   }
   reservations.splice(index, 1);
   lastReservationsLoadTime = 0; // Force refresh
   await deleteReservationFromSupabase(id).catch(e => console.error(e));
+  broadcast("reservations-updated");
   res.json({ success: true, id });
 });
 
@@ -2380,9 +2503,11 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  const server = app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://0.0.0.0:${PORT}`);
   });
+
+  setupWebSocket(server);
 }
 
 if (!process.env.VERCEL) {

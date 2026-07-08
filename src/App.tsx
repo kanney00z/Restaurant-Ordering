@@ -587,6 +587,79 @@ export default function App() {
     }
   }, [settings.supabaseUrl, settings.supabaseAnonKey]);
 
+  // Native WebSocket Real-Time Sync
+  useEffect(() => {
+    let ws: WebSocket | null = null;
+    let reconnectTimeout: any = null;
+    let pingInterval: any = null;
+
+    function connect() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}`;
+      console.log('[WebSocket] Connecting to:', wsUrl);
+      
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        console.log('[WebSocket] Connected successfully.');
+        // Set up ping interval to keep connection alive
+        pingInterval = setInterval(() => {
+          if (ws?.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'ping' }));
+          }
+        }, 30000);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          console.log('[WebSocket] Message received:', data);
+          
+          if (data.type === 'orders-updated') {
+            fetchOrders(true);
+            fetchAnalytics();
+          } else if (data.type === 'reservations-updated') {
+            fetchReservations(true);
+          } else if (data.type === 'menu-updated') {
+            fetchMenu();
+          } else if (data.type === 'categories-updated') {
+            fetchCategories();
+          } else if (data.type === 'settings-updated') {
+            fetchSettings();
+          }
+        } catch (err) {
+          console.error('[WebSocket] Error parsing message:', err);
+        }
+      };
+
+      ws.onclose = () => {
+        console.log('[WebSocket] Connection closed. Retrying in 3 seconds...');
+        cleanup();
+        reconnectTimeout = setTimeout(connect, 3000);
+      };
+
+      ws.onerror = (err) => {
+        console.error('[WebSocket] Connection error:', err);
+        ws?.close();
+      };
+    }
+
+    function cleanup() {
+      if (pingInterval) clearInterval(pingInterval);
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+    }
+
+    connect();
+
+    return () => {
+      cleanup();
+      if (ws) {
+        ws.onclose = null; // Prevent triggering reconnect on manual close
+        ws.close();
+      }
+    };
+  }, []);
+
   // Play chime when order count increases
   useEffect(() => {
     if (orders.length > 0) {
