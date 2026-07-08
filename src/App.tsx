@@ -185,6 +185,7 @@ export default function App() {
   const [editSupabaseUrl, setEditSupabaseUrl] = useState('');
   const [editSupabaseAnonKey, setEditSupabaseAnonKey] = useState('');
   const [settingsSuccessMsg, setSettingsSuccessMsg] = useState('');
+  const [hasInitializedSettings, setHasInitializedSettings] = useState(false);
 
   // Scoped fetch wrapper for API requests that dynamically injects Supabase headers for stateless serverless environments
   const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -284,6 +285,9 @@ export default function App() {
   const [paymentSlip, setPaymentSlip] = useState<string>('');
   const [lastPlacedOrder, setLastPlacedOrder] = useState<Order | null>(null);
   const [editingOrder, setEditingOrder] = useState<Order | null>(null);
+  
+  // Track draft values for item price inputs so they do not reset/disappear during background fetches (หลังบ้านบินมาเอง)
+  const [editingItemPrices, setEditingItemPrices] = useState<{ [key: string]: string }>({});
 
   const startEditingOrder = (order: Order) => {
     // Convert order items to CartItems
@@ -804,11 +808,12 @@ export default function App() {
         // Prevent the "Admin backend settings flying away/reverting" bug (หลังบ้านบินมาเอง)
         // If the admin is currently focusing on or editing any field inside the settings form,
         // we MUST NOT overwrite the inputs they are currently typing into!
+        // We also only copy settings to draft inputs once upon initial load to prevent background updates from overwriting active drafts.
         const isFocusedOnSettings = document.activeElement && (
           document.activeElement.closest('#settings_form') !== null
         );
         
-        if (!isFocusedOnSettings) {
+        if (!hasInitializedSettings && !isFocusedOnSettings) {
           setEditStoreName(data.storeName);
           setEditPromptPayNumber(data.promptPayNumber);
           setEditPromptPayName(data.promptPayName);
@@ -824,6 +829,7 @@ export default function App() {
           setEditIsLoyaltyEnabled(data.isLoyaltyEnabled !== false);
           setEditSupabaseUrl(data.supabaseUrl || '');
           setEditSupabaseAnonKey(data.supabaseAnonKey || '');
+          setHasInitializedSettings(true);
         }
 
         // Dynamic table greeting message
@@ -870,6 +876,25 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setSettings(data);
+        
+        // Sync draft inputs with the verified saved response
+        setEditStoreName(data.storeName);
+        setEditPromptPayNumber(data.promptPayNumber);
+        setEditPromptPayName(data.promptPayName);
+        setEditLineChannelAccessToken(data.lineChannelAccessToken || '');
+        setEditLineUserId(data.lineUserId || '');
+        setEditPhone(data.phone || '081-234-5678');
+        setEditTagline(data.tagline || 'Gastronomy & AI Sommelier');
+        setEditOpenTime(data.openTime || '09:00');
+        setEditCloseTime(data.closeTime || '21:00');
+        setEditClosedDays(data.closedDays || []);
+        setEditIsClosedTemporarily(data.isClosedTemporarily || false);
+        setEditIsReservationEnabled(data.isReservationEnabled !== false);
+        setEditIsLoyaltyEnabled(data.isLoyaltyEnabled !== false);
+        setEditSupabaseUrl(data.supabaseUrl || '');
+        setEditSupabaseAnonKey(data.supabaseAnonKey || '');
+        setHasInitializedSettings(true);
+        
         setSettingsSuccessMsg('บันทึกการตั้งค่าร้านค้าเรียบร้อยแล้ว!');
         setTimeout(() => setSettingsSuccessMsg(''), 4000);
       }
@@ -3377,27 +3402,46 @@ export default function App() {
                                   <span className="text-[10px] text-slate-500">ตั้งราคาต่อหน่วย:</span>
                                   <div className="relative">
                                     <span className="absolute left-2 top-0.5 text-[10px] text-slate-400">฿</span>
-                                    <input
-                                      type="number"
-                                      min="0"
-                                      defaultValue={it.price}
-                                      key={it.price}
-                                      onBlur={(e) => {
-                                        const val = Number(e.target.value);
-                                        if (val !== it.price) {
-                                          handleUpdateItemPrice(order.id, idx, val);
-                                        }
-                                      }}
-                                      onKeyDown={(e) => {
-                                        if (e.key === 'Enter') {
-                                          const val = Number((e.target as HTMLInputElement).value);
-                                          handleUpdateItemPrice(order.id, idx, val);
-                                          (e.target as HTMLInputElement).blur();
-                                        }
-                                      }}
-                                      className="w-20 pl-4 pr-1 py-0.5 bg-slate-900 border border-white/10 rounded font-mono text-xs text-orange-400 font-bold focus:outline-none focus:border-orange-500"
-                                      placeholder="0"
-                                    />
+                                    {(() => {
+                                      const priceKey = `${order.id}_${idx}`;
+                                      const currentVal = editingItemPrices[priceKey] !== undefined 
+                                        ? editingItemPrices[priceKey] 
+                                        : String(it.price);
+                                      return (
+                                        <input
+                                          type="number"
+                                          min="0"
+                                          value={currentVal}
+                                          onChange={(e) => {
+                                            setEditingItemPrices(prev => ({
+                                              ...prev,
+                                              [priceKey]: e.target.value
+                                            }));
+                                          }}
+                                          onBlur={(e) => {
+                                            const val = Number(e.target.value);
+                                            handleUpdateItemPrice(order.id, idx, val);
+                                            // Delay clearing draft to let server update and sync peacefully
+                                            setTimeout(() => {
+                                              setEditingItemPrices(prev => {
+                                                const copy = { ...prev };
+                                                delete copy[priceKey];
+                                                return copy;
+                                              });
+                                            }, 1000);
+                                          }}
+                                          onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                              const val = Number((e.target as HTMLInputElement).value);
+                                              handleUpdateItemPrice(order.id, idx, val);
+                                              (e.target as HTMLInputElement).blur();
+                                            }
+                                          }}
+                                          className="w-20 pl-4 pr-1 py-0.5 bg-slate-900 border border-white/10 rounded font-mono text-xs text-orange-400 font-bold focus:outline-none focus:border-orange-500"
+                                          placeholder="0"
+                                        />
+                                      );
+                                    })()}
                                   </div>
                                   <span className="text-[10px] text-slate-500 font-bold ml-1">รวม:</span>
                                   <span className="font-mono text-slate-300 font-bold w-16 text-right">
