@@ -186,9 +186,23 @@ export default function App() {
   const [editSupabaseAnonKey, setEditSupabaseAnonKey] = useState('');
   const [settingsSuccessMsg, setSettingsSuccessMsg] = useState('');
 
-  // Scoped fetch wrapper for API requests
+  // Scoped fetch wrapper for API requests that dynamically injects Supabase headers for stateless serverless environments
   const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-    return window.fetch(input, init);
+    const url = localStorage.getItem('aura_supabase_url') || '';
+    const key = localStorage.getItem('aura_supabase_anon_key') || '';
+    
+    const headers = new Headers(init?.headers);
+    if (url && !headers.has('x-supabase-url')) {
+      headers.set('x-supabase-url', url);
+    }
+    if (key && !headers.has('x-supabase-key')) {
+      headers.set('x-supabase-key', key);
+    }
+    
+    return window.fetch(input, {
+      ...init,
+      headers
+    });
   };
 
   // 5 Feature Upgrades states
@@ -534,8 +548,8 @@ export default function App() {
 
   // Supabase Real-Time Client Subscription
   useEffect(() => {
-    const url = settings.supabaseUrl?.trim() || (import.meta as any).env.VITE_SUPABASE_URL?.trim();
-    const key = settings.supabaseAnonKey?.trim() || (import.meta as any).env.VITE_SUPABASE_ANON_KEY?.trim();
+    const url = settings.supabaseUrl?.trim() || localStorage.getItem('aura_supabase_url')?.trim() || (import.meta as any).env.VITE_SUPABASE_URL?.trim();
+    const key = settings.supabaseAnonKey?.trim() || localStorage.getItem('aura_supabase_anon_key')?.trim() || (import.meta as any).env.VITE_SUPABASE_ANON_KEY?.trim();
     
     console.log('[Supabase Real-time] Checking config:', { url, key });
 
@@ -780,22 +794,37 @@ export default function App() {
       const res = await fetch('/api/settings');
       if (res.ok) {
         const data = await res.json();
+        
+        // Persist Supabase credentials locally in browser storage so they survive server container restarts or server cold starts on serverless environments
+        if (data.supabaseUrl) localStorage.setItem('aura_supabase_url', data.supabaseUrl);
+        if (data.supabaseAnonKey) localStorage.setItem('aura_supabase_anon_key', data.supabaseAnonKey);
+        
         setSettings(data);
-        setEditStoreName(data.storeName);
-        setEditPromptPayNumber(data.promptPayNumber);
-        setEditPromptPayName(data.promptPayName);
-        setEditLineChannelAccessToken(data.lineChannelAccessToken || '');
-        setEditLineUserId(data.lineUserId || '');
-        setEditPhone(data.phone || '081-234-5678');
-        setEditTagline(data.tagline || 'Gastronomy & AI Sommelier');
-        setEditOpenTime(data.openTime || '09:00');
-        setEditCloseTime(data.closeTime || '21:00');
-        setEditClosedDays(data.closedDays || []);
-        setEditIsClosedTemporarily(data.isClosedTemporarily || false);
-        setEditIsReservationEnabled(data.isReservationEnabled !== false);
-        setEditIsLoyaltyEnabled(data.isLoyaltyEnabled !== false);
-        setEditSupabaseUrl(data.supabaseUrl || '');
-        setEditSupabaseAnonKey(data.supabaseAnonKey || '');
+        
+        // Prevent the "Admin backend settings flying away/reverting" bug (หลังบ้านบินมาเอง)
+        // If the admin is currently focusing on or editing any field inside the settings form,
+        // we MUST NOT overwrite the inputs they are currently typing into!
+        const isFocusedOnSettings = document.activeElement && (
+          document.activeElement.closest('#settings_form') !== null
+        );
+        
+        if (!isFocusedOnSettings) {
+          setEditStoreName(data.storeName);
+          setEditPromptPayNumber(data.promptPayNumber);
+          setEditPromptPayName(data.promptPayName);
+          setEditLineChannelAccessToken(data.lineChannelAccessToken || '');
+          setEditLineUserId(data.lineUserId || '');
+          setEditPhone(data.phone || '081-234-5678');
+          setEditTagline(data.tagline || 'Gastronomy & AI Sommelier');
+          setEditOpenTime(data.openTime || '09:00');
+          setEditCloseTime(data.closeTime || '21:00');
+          setEditClosedDays(data.closedDays || []);
+          setEditIsClosedTemporarily(data.isClosedTemporarily || false);
+          setEditIsReservationEnabled(data.isReservationEnabled !== false);
+          setEditIsLoyaltyEnabled(data.isLoyaltyEnabled !== false);
+          setEditSupabaseUrl(data.supabaseUrl || '');
+          setEditSupabaseAnonKey(data.supabaseAnonKey || '');
+        }
 
         // Dynamic table greeting message
         const params = new URLSearchParams(window.location.search);
@@ -813,6 +842,10 @@ export default function App() {
     e.preventDefault();
     setSettingsSuccessMsg('');
     try {
+      // Save credentials in client browser storage first to guarantee uninterrupted service
+      if (editSupabaseUrl.trim()) localStorage.setItem('aura_supabase_url', editSupabaseUrl.trim());
+      if (editSupabaseAnonKey.trim()) localStorage.setItem('aura_supabase_anon_key', editSupabaseAnonKey.trim());
+      
       const res = await fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -3477,7 +3510,7 @@ export default function App() {
                     <p className="text-[10px] text-slate-400 font-sans">ปรับเปลี่ยนชื่อร้านค้าและช่องทางบัญชีรับโอนเงินของทางร้านแบบเรียลไทม์</p>
                   </div>
 
-                  <form onSubmit={handleUpdateSettings} className="space-y-3">
+                  <form id="settings_form" onSubmit={handleUpdateSettings} className="space-y-3">
                     <div>
                       <label className="block text-[10px] text-slate-400 mb-1">ชื่อร้านค้า (Store Name) *</label>
                       <input

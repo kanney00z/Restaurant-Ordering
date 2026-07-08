@@ -710,7 +710,7 @@ async function syncSettingsToSupabase() {
   const supabase = getSupabase();
   if (!supabase) return;
   try {
-    const { error } = await supabase.from('restaurant_settings').upsert({
+    const payload = {
       id: 'default',
       store_name: restaurantSettings.storeName,
       promptpay_number: restaurantSettings.promptPayNumber,
@@ -726,10 +726,38 @@ async function syncSettingsToSupabase() {
       is_reservation_enabled: restaurantSettings.isReservationEnabled !== false,
       is_loyalty_enabled: restaurantSettings.isLoyaltyEnabled !== false,
       last_line_error: restaurantSettings.lastLineError || ""
-    });
-    if (error) console.error("Supabase settings sync error:", error);
-  } catch (e) {
-    console.error("Supabase settings sync failed:", e);
+    };
+
+    const { error } = await supabase.from('restaurant_settings').upsert(payload);
+    
+    if (error) {
+      if (error.code === '42P01') {
+        console.warn("[Supabase Settings Sync] 'restaurant_settings' table does not exist in your Supabase database. Falling back to local file 'restaurant_settings.json' storage.");
+      } else if (error.code === '42703') {
+        console.warn("[Supabase Settings Sync] Some newer settings columns are missing. Attempting fallback with original base schema columns...", error.message);
+        
+        const basePayload = {
+          id: 'default',
+          store_name: restaurantSettings.storeName,
+          promptpay_number: restaurantSettings.promptPayNumber,
+          promptpay_name: restaurantSettings.promptPayName,
+          line_channel_access_token: restaurantSettings.lineChannelAccessToken || "",
+          line_user_id: restaurantSettings.lineUserId || "",
+          last_line_error: restaurantSettings.lastLineError || ""
+        };
+
+        const fallbackResult = await supabase.from('restaurant_settings').upsert(basePayload);
+        if (fallbackResult.error) {
+          console.error("[Supabase Settings Sync] Base settings fallback also failed:", fallbackResult.error.message);
+        } else {
+          console.log("[Supabase Settings Sync] Successfully synced base settings to Supabase.");
+        }
+      } else {
+        console.error("Supabase settings sync error:", error.message || error);
+      }
+    }
+  } catch (e: any) {
+    console.error("Supabase settings sync failed with unexpected error:", e.message || e);
   }
 }
 
@@ -1127,7 +1155,7 @@ initializeSupabaseData().catch(e => console.error("Error initializing Supabase d
 let lastSettingsLoadTime = 0;
 async function ensureSettingsLoaded() {
   const now = Date.now();
-  if (now - lastSettingsLoadTime < 5000) return;
+  if (now - lastSettingsLoadTime < 5000 && !process.env.VERCEL) return;
   const supabase = getSupabase();
   if (!supabase) return;
   try {
@@ -1166,7 +1194,7 @@ async function ensureSettingsLoaded() {
 let lastCategoriesLoadTime = 0;
 async function ensureCategoriesLoaded() {
   const now = Date.now();
-  if (now - lastCategoriesLoadTime < 5000) return;
+  if (now - lastCategoriesLoadTime < 5000 && !process.env.VERCEL) return;
   const supabase = getSupabase();
   if (!supabase) return;
   try {
@@ -1206,7 +1234,7 @@ async function ensureCategoriesLoaded() {
 let lastMenuLoadTime = 0;
 async function ensureMenuItemsLoaded() {
   const now = Date.now();
-  if (now - lastMenuLoadTime < 3000) return;
+  if (now - lastMenuLoadTime < 3000 && !process.env.VERCEL) return;
   const supabase = getSupabase();
   if (!supabase) return;
   try {
@@ -1241,7 +1269,7 @@ async function ensureMenuItemsLoaded() {
 let lastOrdersLoadTime = 0;
 async function ensureOrdersLoaded(force = false) {
   const now = Date.now();
-  if (!force && (now - lastOrdersLoadTime < 2000)) return;
+  if (!force && (now - lastOrdersLoadTime < 2000) && !process.env.VERCEL) return;
   const supabase = getSupabase();
   if (!supabase) return;
   try {
@@ -1306,7 +1334,7 @@ async function ensureOrdersLoaded(force = false) {
 let lastReservationsLoadTime = 0;
 async function ensureReservationsLoaded(force = false) {
   const now = Date.now();
-  if (!force && (now - lastReservationsLoadTime < 2000)) return;
+  if (!force && (now - lastReservationsLoadTime < 2000) && !process.env.VERCEL) return;
   const supabase = getSupabase();
   if (!supabase) return;
   try {
