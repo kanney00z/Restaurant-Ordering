@@ -158,6 +158,7 @@ export interface RestaurantSettings {
   lastLineError?: string;
   supabaseUrl?: string;
   supabaseAnonKey?: string;
+  lastSupabaseError?: string;
 }
 
 const DATA_DIR = process.env.VERCEL ? '/tmp' : process.cwd();
@@ -731,6 +732,13 @@ async function syncSettingsToSupabase() {
     const { error } = await supabase.from('restaurant_settings').upsert(payload);
     
     if (error) {
+      let errorMsg = error.message || String(error);
+      if (error.code === '42501' || errorMsg.includes('row-level security policy')) {
+        errorMsg = "Row-Level Security (RLS) is active in Supabase. Please copy and run the SQL Script in your Supabase SQL Editor to disable RLS and grant public access: 'alter table restaurant_settings disable row level security;' and 'grant all on restaurant_settings to anon, authenticated, service_role;'";
+      }
+      restaurantSettings.lastSupabaseError = errorMsg;
+      saveLocalFile("restaurant_settings.json", restaurantSettings);
+
       if (error.code === '42P01') {
         console.warn("[Supabase Settings Sync] 'restaurant_settings' table does not exist in your Supabase database. Falling back to local file 'restaurant_settings.json' storage.");
       } else if (error.code === '42703') {
@@ -749,12 +757,23 @@ async function syncSettingsToSupabase() {
         const fallbackResult = await supabase.from('restaurant_settings').upsert(basePayload);
         if (fallbackResult.error) {
           console.error("[Supabase Settings Sync] Base settings fallback also failed:", fallbackResult.error.message);
+          let fbErrorMsg = fallbackResult.error.message || String(fallbackResult.error);
+          if (fallbackResult.error.code === '42501' || fbErrorMsg.includes('row-level security policy')) {
+            fbErrorMsg = "Row-Level Security (RLS) is active in Supabase. Please copy and run the SQL Script in your Supabase SQL Editor to disable RLS and grant public access: 'alter table restaurant_settings disable row level security;' and 'grant all on restaurant_settings to anon, authenticated, service_role;'";
+          }
+          restaurantSettings.lastSupabaseError = fbErrorMsg;
+          saveLocalFile("restaurant_settings.json", restaurantSettings);
         } else {
           console.log("[Supabase Settings Sync] Successfully synced base settings to Supabase.");
+          restaurantSettings.lastSupabaseError = "";
+          saveLocalFile("restaurant_settings.json", restaurantSettings);
         }
       } else {
         console.error("Supabase settings sync error:", error.message || error);
       }
+    } else {
+      restaurantSettings.lastSupabaseError = "";
+      saveLocalFile("restaurant_settings.json", restaurantSettings);
     }
   } catch (e: any) {
     console.error("Supabase settings sync failed with unexpected error:", e.message || e);
@@ -1010,7 +1029,8 @@ async function initializeSupabaseData() {
         isLoyaltyEnabled: settingsData.is_loyalty_enabled,
         lastLineError: settingsData.last_line_error,
         supabaseUrl: restaurantSettings.supabaseUrl,
-        supabaseAnonKey: restaurantSettings.supabaseAnonKey
+        supabaseAnonKey: restaurantSettings.supabaseAnonKey,
+        lastSupabaseError: restaurantSettings.lastSupabaseError
       };
       console.log("Settings loaded from Supabase.");
     } else {
@@ -1182,7 +1202,8 @@ async function ensureSettingsLoaded() {
         isLoyaltyEnabled: settingsData.is_loyalty_enabled,
         lastLineError: settingsData.last_line_error,
         supabaseUrl: restaurantSettings.supabaseUrl,
-        supabaseAnonKey: restaurantSettings.supabaseAnonKey
+        supabaseAnonKey: restaurantSettings.supabaseAnonKey,
+        lastSupabaseError: restaurantSettings.lastSupabaseError
       };
       lastSettingsLoadTime = now;
     }

@@ -91,6 +91,7 @@ export interface RestaurantSettings {
   lastLineError?: string;
   supabaseUrl?: string;
   supabaseAnonKey?: string;
+  lastSupabaseError?: string;
 }
 
 export interface Reservation {

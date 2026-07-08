@@ -3735,7 +3735,7 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* Supabase Database Settings */}
+                     {/* Supabase Database Settings */}
                     <div className="border-t border-white/5 pt-3 mt-3 space-y-3">
                       <div>
                         <h5 className="text-[11px] font-bold text-[#3ECF8E] uppercase tracking-wide flex items-center gap-1">
@@ -3744,6 +3744,14 @@ export default function App() {
                         </h5>
                         <p className="text-[9px] text-slate-400 font-sans">ซิงก์ข้อมูลออเดอร์ เมนู และการจองโต๊ะผ่าน Cloud Database ของ Supabase แบบเรียลไทม์ทันทีเมื่อมีการเปลี่ยนแปลงในระบบ</p>
                       </div>
+
+                      {settings.lastSupabaseError && (
+                        <div className="bg-rose-500/10 border border-rose-500/20 p-2.5 rounded-lg text-[9px] text-rose-400 font-sans flex flex-col gap-1.5 animate-fadeIn">
+                          <span className="font-bold flex items-center gap-1">⚠️ ปัญหาการเชื่อมต่อ / สิทธิ์การบันทึกข้อมูล (Supabase Sync Error):</span>
+                          <span className="font-mono break-all bg-black/30 p-1.5 rounded text-rose-300">{settings.lastSupabaseError}</span>
+                          <span className="text-slate-400">กรุณาตรวจสอบว่าคุณได้สร้างตาราง รัน SQL Script และ<strong>สั่งปิด Row Level Security (RLS)</strong> พร้อมทั้งแกรนต์สิทธิ์ตามสคริปต์ SQL คู่มือด้านล่างเรียบร้อยแล้วในเมนู SQL Editor ของคอนโซล Supabase</span>
+                        </div>
+                      )}
 
                       <div>
                         <label className="block text-[10px] text-slate-400 mb-1 font-sans">Supabase Project URL</label>
