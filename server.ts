@@ -596,9 +596,19 @@ function getSupabase() {
       if (cachedSupabaseClient && url === lastSupabaseUrl && key === lastSupabaseKey) {
         return cachedSupabaseClient;
       }
+      const isFirstInitOrChanged = !cachedSupabaseClient || url !== lastSupabaseUrl || key !== lastSupabaseKey;
       lastSupabaseUrl = url;
       lastSupabaseKey = key;
       cachedSupabaseClient = createClient(url, key);
+      
+      if (isFirstInitOrChanged) {
+        console.log(`[Supabase] Client initialized for URL: ${url}. Triggering lazy-loaded data initialization and seeding...`);
+        // Trigger initialization asynchronously to avoid blocking the current thread or causing circular calls
+        setTimeout(() => {
+          initializeSupabaseData().catch(e => console.error("Error running lazy-loaded Supabase initialization:", e));
+        }, 100);
+      }
+      
       return cachedSupabaseClient;
     } catch (e) {
       console.error("Supabase client creation error:", e);
@@ -688,6 +698,18 @@ function mapSupabaseOrder(order: any): Order {
   const totalAmount = Number(order.total_amount !== undefined ? order.total_amount : (order.total || 0));
   const timestamp = order.timestamp || order.date || new Date().toISOString();
 
+  let items = order.items;
+  if (typeof items === 'string') {
+    try {
+      items = JSON.parse(items);
+    } catch (e) {
+      items = [];
+    }
+  }
+  if (!Array.isArray(items)) {
+    items = [];
+  }
+
   return {
     id: order.id,
     orderNumber,
@@ -698,7 +720,7 @@ function mapSupabaseOrder(order: any): Order {
     phone,
     paymentMethod: order.payment_method || "cash",
     paymentSlip,
-    items: order.items || [],
+    items,
     totalAmount,
     status: order.status || "pending",
     timestamp
@@ -1038,78 +1060,8 @@ async function initializeSupabaseData() {
       await syncSettingsToSupabase();
     }
 
-    // 2. Load Menu Items
-    const { data: menuData, error: menuErr } = await supabase
-      .from('menu_items')
-      .select('*');
-      
-    if (menuErr) {
-      console.error("Error loading menu from Supabase:", menuErr);
-    } else {
-      const fetchedItems = (menuData || [])
-        .filter(item => !deletedMenuItemIds.includes(item.id))
-        .map(item => mapSupabaseMenuItem(item));
-        
-      menuItems = fetchedItems;
-      saveLocalFile("menu_items.json", menuItems);
-      console.log(`Loaded ${menuItems.length} menu items from Supabase.`);
-    }
-
-    // 3. Load Orders
-    const { data: ordersData, error: ordersErr } = await supabase
-      .from('orders')
-      .select('*');
-      
-    if (ordersErr) {
-      console.error("Error loading orders from Supabase:", ordersErr);
-    } else {
-      const fetchedOrders = (ordersData || [])
-        .filter(order => !deletedOrderIds.includes(order.id))
-        .map(order => mapSupabaseOrder(order));
-        
-      orders = fetchedOrders.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-      
-      const maxOrderNum = orders.reduce((max, o) => {
-        const num = Number(o.orderNumber);
-        return isNaN(num) ? max : Math.max(max, num);
-      }, 1003);
-      orderCounter = maxOrderNum + 1;
-      
-      saveLocalFile("orders.json", orders);
-      saveLocalFile("order_counter.json", orderCounter);
-      console.log(`Loaded ${orders.length} orders from Supabase. Next OrderCounter: ${orderCounter}`);
-    }
-
-    // 4. Load Reservations
-    const { data: resData, error: resErr } = await supabase
-      .from('reservations')
-      .select('*');
-      
-    if (resErr) {
-      console.error("Error loading reservations from Supabase:", resErr);
-    } else {
-      const fetchedReservations = (resData || [])
-        .filter(resv => !deletedReservationIds.includes(resv.id))
-        .map(resv => ({
-          id: resv.id,
-          customerName: resv.customer_name,
-          phone: resv.phone,
-          date: resv.date,
-          time: resv.time,
-          partySize: Number(resv.party_size),
-          tablePreference: resv.table_preference,
-          specialRequest: resv.special_request,
-          status: resv.status,
-          timestamp: resv.timestamp
-        }));
-        
-      reservations = fetchedReservations.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-      
-      saveLocalFile("reservations.json", reservations);
-      console.log(`Loaded ${reservations.length} reservations from Supabase.`);
-    }
-
-    // 5. Load Categories
+    // 2. Load Categories First (needed for menu items)
+    let fetchedCats: Category[] = [];
     try {
       const { data: catData, error: catErr } = await supabase
         .from('categories')
@@ -1118,7 +1070,7 @@ async function initializeSupabaseData() {
       if (catErr) {
         console.error("Error loading categories from Supabase:", catErr);
       } else {
-        const fetchedCats = (catData || [])
+        fetchedCats = (catData || [])
           .filter(c => !deletedCategoryIds.includes(c.id))
           .map(c => ({
             id: c.id,
@@ -1126,14 +1078,131 @@ async function initializeSupabaseData() {
             nameEn: c.name_en,
             emoji: c.emoji || "🍽️"
           }));
-          
-        categories = fetchedCats;
-        saveLocalFile("categories.json", categories);
-        console.log(`Loaded ${categories.length} categories from Supabase.`);
       }
     } catch (e) {
-      // Table may not exist yet, which is fine
+      console.error("Failed to query categories table:", e);
     }
+
+    if (fetchedCats.length === 0) {
+      console.log("No categories found in Supabase. Seeding default categories...");
+      for (const cat of DEFAULT_CATEGORIES) {
+        await syncCategoryToSupabase(cat).catch(e => console.error(e));
+      }
+      categories = [...DEFAULT_CATEGORIES];
+    } else {
+      categories = fetchedCats;
+    }
+    saveLocalFile("categories.json", categories);
+    console.log(`Initialized ${categories.length} categories.`);
+
+    // 3. Load Menu Items
+    let fetchedItems: MenuItem[] = [];
+    try {
+      const { data: menuData, error: menuErr } = await supabase
+        .from('menu_items')
+        .select('*');
+        
+      if (menuErr) {
+        console.error("Error loading menu from Supabase:", menuErr);
+      } else {
+        fetchedItems = (menuData || [])
+          .filter(item => !deletedMenuItemIds.includes(item.id))
+          .map(item => mapSupabaseMenuItem(item));
+      }
+    } catch (e) {
+      console.error("Failed to query menu_items table:", e);
+    }
+
+    if (fetchedItems.length === 0) {
+      console.log("No menu items found in Supabase. Seeding default menu items...");
+      for (const item of DEFAULT_MENU_ITEMS) {
+        await syncMenuItemToSupabase(item).catch(e => console.error(e));
+      }
+      menuItems = [...DEFAULT_MENU_ITEMS];
+    } else {
+      menuItems = fetchedItems;
+    }
+    saveLocalFile("menu_items.json", menuItems);
+    console.log(`Initialized ${menuItems.length} menu items.`);
+
+    // 4. Load Orders
+    let fetchedOrders: Order[] = [];
+    try {
+      const { data: ordersData, error: ordersErr } = await supabase
+        .from('orders')
+        .select('*');
+        
+      if (ordersErr) {
+        console.error("Error loading orders from Supabase:", ordersErr);
+      } else {
+        fetchedOrders = (ordersData || [])
+          .filter(order => !deletedOrderIds.includes(order.id))
+          .map(order => mapSupabaseOrder(order));
+      }
+    } catch (e) {
+      console.error("Failed to query orders table:", e);
+    }
+
+    if (fetchedOrders.length === 0) {
+      console.log("No orders found in Supabase. Seeding default orders...");
+      for (const order of DEFAULT_ORDERS) {
+        await syncOrderToSupabase(order).catch(e => console.error(e));
+      }
+      orders = [...DEFAULT_ORDERS];
+    } else {
+      orders = fetchedOrders.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    }
+    const maxOrderNum = orders.reduce((max, o) => {
+      const num = Number(o.orderNumber);
+      return isNaN(num) ? max : Math.max(max, num);
+    }, 1003);
+    orderCounter = maxOrderNum + 1;
+    
+    saveLocalFile("orders.json", orders);
+    saveLocalFile("order_counter.json", orderCounter);
+    console.log(`Initialized ${orders.length} orders. Next OrderCounter: ${orderCounter}`);
+
+    // 5. Load Reservations
+    let fetchedReservations: Reservation[] = [];
+    try {
+      const { data: resData, error: resErr } = await supabase
+        .from('reservations')
+        .select('*');
+        
+      if (resErr) {
+        console.error("Error loading reservations from Supabase:", resErr);
+      } else {
+        fetchedReservations = (resData || [])
+          .filter(resv => !deletedReservationIds.includes(resv.id))
+          .map(resv => ({
+            id: resv.id,
+            customerName: resv.customer_name,
+            phone: resv.phone,
+            date: resv.date,
+            time: resv.time,
+            partySize: Number(resv.party_size),
+            tablePreference: resv.table_preference,
+            specialRequest: resv.special_request,
+            status: resv.status,
+            timestamp: resv.timestamp
+          }));
+      }
+    } catch (e) {
+      console.error("Failed to query reservations table:", e);
+    }
+
+    if (fetchedReservations.length === 0) {
+      console.log("No reservations found in Supabase. Seeding default reservations...");
+      for (const resv of DEFAULT_RESERVATIONS) {
+        await syncReservationToSupabase(resv).catch(e => console.error(e));
+      }
+      reservations = [...DEFAULT_RESERVATIONS];
+    } else {
+      reservations = fetchedReservations.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    }
+    
+    saveLocalFile("reservations.json", reservations);
+    console.log(`Initialized ${reservations.length} reservations.`);
 
   } catch (e) {
     console.error("Exception in Supabase loading:", e);
