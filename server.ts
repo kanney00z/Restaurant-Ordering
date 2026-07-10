@@ -179,6 +179,13 @@ function loadLocalFile(filename: string, defaultValue: any) {
       const content = fs.readFileSync(filePath, "utf8");
       return JSON.parse(content);
     }
+    
+    // Read-only fallback to process.cwd() for environments like Vercel where DATA_DIR is /tmp
+    const fallbackPath = path.join(process.cwd(), filename);
+    if (fallbackPath !== filePath && fs.existsSync(fallbackPath)) {
+      const content = fs.readFileSync(fallbackPath, "utf8");
+      return JSON.parse(content);
+    }
   } catch (e) {
     console.error(`Error loading local file ${filename}:`, e);
   }
