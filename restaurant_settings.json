@@ -1,0 +1,19 @@
+{
+  "storeName": "AAA",
+  "promptPayNumber": "081-234-5678",
+  "promptPayName": "คุณสมศรี ดีดี",
+  "lineChannelAccessToken": "",
+  "lineUserId": "",
+  "phone": "081-234-5678",
+  "tagline": "Gastronomy & AI Sommelier",
+  "openTime": "08:00",
+  "closeTime": "21:00",
+  "closedDays": [],
+  "isClosedTemporarily": false,
+  "isReservationEnabled": false,
+  "isLoyaltyEnabled": false,
+  "lastLineError": "",
+  "supabaseUrl": "https://axmgnqcefaavzdabkeoz.supabase.co",
+  "supabaseAnonKey": "sb_publishable_4gu_0x-VkDg2GaO5ciD9pw_fa_lU7Qd",
+  "lastSupabaseError": ""
+}

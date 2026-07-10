@@ -1,0 +1,26 @@
+[
+  {
+    "id": "appetizer",
+    "nameTh": "อาหารเรียกน้ำย่อย",
+    "nameEn": "Appetizers",
+    "emoji": "🥗"
+  },
+  {
+    "id": "main",
+    "nameTh": "อาหารจานหลัก",
+    "nameEn": "Mains",
+    "emoji": "🥩"
+  },
+  {
+    "id": "dessert",
+    "nameTh": "ของหวาน",
+    "nameEn": "Desserts",
+    "emoji": "🍨"
+  },
+  {
+    "id": "beverage",
+    "nameTh": "เครื่องดื่ม",
+    "nameEn": "Beverages",
+    "emoji": "🍹"
+  }
+]

@@ -137,7 +137,7 @@ export default function App() {
   const [newDescTh, setNewDescTh] = useState('');
   const [newDescEn, setNewDescEn] = useState('');
   const [newPrice, setNewPrice] = useState('');
-  const [newCategory, setNewCategory] = useState<string>('main');
+  const [newCategory, setNewCategory] = useState<string>('');
   const [newImage, setNewImage] = useState('');
   const [newPrepTime, setNewPrepTime] = useState('15');
   const [newIngredients, setNewIngredients] = useState('');
@@ -784,7 +784,7 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setCategories(data);
-        if (data.length > 0 && !newCategory) {
+        if (data.length > 0 && (!newCategory || !data.some((c: any) => c.id === newCategory))) {
           setNewCategory(data[0].id);
         }
       }

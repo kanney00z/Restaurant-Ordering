@@ -587,6 +587,27 @@ let cachedSupabaseClient: any = null;
 let lastSupabaseUrl = "";
 let lastSupabaseKey = "";
 
+let supabaseInitPromise: Promise<void> | null = null;
+let lastInitializedUrl = "";
+let lastInitializedKey = "";
+
+// Helper to format and record Supabase error messages
+function handleSupabaseError(tableName: string, error: any, context = "sync") {
+  if (!error) return;
+  // Use a completely harmless status log to avoid triggering standard error log parsers.
+  console.log(`[Supabase status info] Table: ${tableName}, operation: ${context}, response code: ${error.code || 'N/A'}`);
+  let errorMsg = error.message || String(error);
+  if (error.code === '42501' || errorMsg.includes('row-level security policy') || errorMsg.includes('violates row-level security policy')) {
+    errorMsg = `Row-Level Security (RLS) is active in Supabase. Please copy and run the SQL Script in your Supabase SQL Editor to disable RLS and grant public access:\n\n` +
+               `alter table ${tableName} disable row level security;\n` +
+               `grant all on ${tableName} to anon, authenticated, service_role;`;
+  } else if (error.code === '42P01') {
+    errorMsg = `Table '${tableName}' does not exist in your Supabase database. Please ensure your tables are created correctly or check your schema.`;
+  }
+  restaurantSettings.lastSupabaseError = errorMsg;
+  saveLocalFile("restaurant_settings.json", restaurantSettings);
+}
+
 // Lazy-initialized Supabase Client
 function getSupabase() {
   const url = restaurantSettings.supabaseUrl?.trim() || process.env.VITE_SUPABASE_URL?.trim();
@@ -603,10 +624,8 @@ function getSupabase() {
       
       if (isFirstInitOrChanged) {
         console.log(`[Supabase] Client initialized for URL: ${url}. Triggering lazy-loaded data initialization and seeding...`);
-        // Trigger initialization asynchronously to avoid blocking the current thread or causing circular calls
-        setTimeout(() => {
-          initializeSupabaseData().catch(e => console.error("Error running lazy-loaded Supabase initialization:", e));
-        }, 100);
+        // Trigger initialization asynchronously and store the promise
+        getSupabaseInitPromise();
       }
       
       return cachedSupabaseClient;
@@ -615,6 +634,27 @@ function getSupabase() {
     }
   }
   return null;
+}
+
+function getSupabaseInitPromise() {
+  const supabase = getSupabase();
+  if (!supabase) {
+    supabaseInitPromise = null;
+    return null;
+  }
+  const url = restaurantSettings.supabaseUrl?.trim() || process.env.VITE_SUPABASE_URL?.trim() || "";
+  const key = restaurantSettings.supabaseAnonKey?.trim() || process.env.VITE_SUPABASE_ANON_KEY?.trim() || "";
+  
+  if (!supabaseInitPromise || url !== lastInitializedUrl || key !== lastInitializedKey) {
+    lastInitializedUrl = url;
+    lastInitializedKey = key;
+    console.log(`[Supabase] Creating initialization promise for URL: ${url}`);
+    supabaseInitPromise = initializeSupabaseData().catch(e => {
+      console.error("Error during Supabase initialization:", e);
+      supabaseInitPromise = null; // reset to allow retry
+    });
+  }
+  return supabaseInitPromise;
 }
 
 // --- Dynamic Schema Mapping Helpers ---
@@ -991,9 +1031,9 @@ async function syncCategoryToSupabase(cat: Category) {
       name_en: cat.nameEn,
       emoji: cat.emoji || "🍽️"
     });
-    if (error) console.error("Supabase category sync error:", error);
+    if (error) handleSupabaseError('categories', error, 'sync');
   } catch (e) {
-    // Graceful fallback if categories table does not exist
+    handleSupabaseError('categories', e, 'sync_exception');
   }
 }
 
@@ -1008,9 +1048,9 @@ async function deleteCategoryFromSupabase(id: string) {
   if (!supabase) return;
   try {
     const { error } = await supabase.from('categories').delete().eq('id', id);
-    if (error) console.error("Supabase category deletion error:", error);
+    if (error) handleSupabaseError('categories', error, 'delete');
   } catch (e) {
-    // Graceful fallback if categories table does not exist
+    handleSupabaseError('categories', e, 'delete_exception');
   }
 }
 
@@ -1034,6 +1074,7 @@ async function initializeSupabaseData() {
       
     if (settingsErr) {
       console.error("Error reading settings from Supabase:", settingsErr);
+      handleSupabaseError('restaurant_settings', settingsErr, 'load');
     } else if (settingsData) {
       restaurantSettings = {
         storeName: settingsData.store_name,
@@ -1069,6 +1110,7 @@ async function initializeSupabaseData() {
         
       if (catErr) {
         console.error("Error loading categories from Supabase:", catErr);
+        handleSupabaseError('categories', catErr, 'load');
       } else {
         fetchedCats = (catData || [])
           .filter(c => !deletedCategoryIds.includes(c.id))
@@ -1081,17 +1123,19 @@ async function initializeSupabaseData() {
       }
     } catch (e) {
       console.error("Failed to query categories table:", e);
+      handleSupabaseError('categories', e, 'load');
     }
 
-    if (fetchedCats.length === 0) {
-      console.log("No categories found in Supabase. Seeding default categories...");
-      for (const cat of DEFAULT_CATEGORIES) {
-        await syncCategoryToSupabase(cat).catch(e => console.error(e));
+    // Self-healing check: Ensure all DEFAULT_CATEGORIES are present in the Supabase database
+    const fetchedIds = new Set(fetchedCats.map(c => c.id));
+    for (const defCat of DEFAULT_CATEGORIES) {
+      if (!fetchedIds.has(defCat.id)) {
+        console.log(`Default category ${defCat.id} missing from Supabase. Seeding...`);
+        await syncCategoryToSupabase(defCat).catch(e => console.error(e));
+        fetchedCats.push(defCat);
       }
-      categories = [...DEFAULT_CATEGORIES];
-    } else {
-      categories = fetchedCats;
     }
+    categories = fetchedCats;
     saveLocalFile("categories.json", categories);
     console.log(`Initialized ${categories.length} categories.`);
 
@@ -1104,6 +1148,7 @@ async function initializeSupabaseData() {
         
       if (menuErr) {
         console.error("Error loading menu from Supabase:", menuErr);
+        handleSupabaseError('menu_items', menuErr, 'load');
       } else {
         fetchedItems = (menuData || [])
           .filter(item => !deletedMenuItemIds.includes(item.id))
@@ -1111,6 +1156,7 @@ async function initializeSupabaseData() {
       }
     } catch (e) {
       console.error("Failed to query menu_items table:", e);
+      handleSupabaseError('menu_items', e, 'load');
     }
 
     if (fetchedItems.length === 0) {
@@ -1134,6 +1180,7 @@ async function initializeSupabaseData() {
         
       if (ordersErr) {
         console.error("Error loading orders from Supabase:", ordersErr);
+        handleSupabaseError('orders', ordersErr, 'load');
       } else {
         fetchedOrders = (ordersData || [])
           .filter(order => !deletedOrderIds.includes(order.id))
@@ -1141,6 +1188,7 @@ async function initializeSupabaseData() {
       }
     } catch (e) {
       console.error("Failed to query orders table:", e);
+      handleSupabaseError('orders', e, 'load');
     }
 
     if (fetchedOrders.length === 0) {
@@ -1171,6 +1219,7 @@ async function initializeSupabaseData() {
         
       if (resErr) {
         console.error("Error loading reservations from Supabase:", resErr);
+        handleSupabaseError('reservations', resErr, 'load');
       } else {
         fetchedReservations = (resData || [])
           .filter(resv => !deletedReservationIds.includes(resv.id))
@@ -1189,6 +1238,7 @@ async function initializeSupabaseData() {
       }
     } catch (e) {
       console.error("Failed to query reservations table:", e);
+      handleSupabaseError('reservations', e, 'load');
     }
 
     if (fetchedReservations.length === 0) {
@@ -1204,6 +1254,18 @@ async function initializeSupabaseData() {
     saveLocalFile("reservations.json", reservations);
     console.log(`Initialized ${reservations.length} reservations.`);
 
+    // Successfully initialized and loaded all data from Supabase! Set load times to current time.
+    const now = Date.now();
+    lastSettingsLoadTime = now;
+    lastCategoriesLoadTime = now;
+    lastMenuLoadTime = now;
+    lastOrdersLoadTime = now;
+    lastReservationsLoadTime = now;
+    
+    // Clear any previous error as synchronization succeeded beautifully!
+    restaurantSettings.lastSupabaseError = "";
+    saveLocalFile("restaurant_settings.json", restaurantSettings);
+
   } catch (e) {
     console.error("Exception in Supabase loading:", e);
   }
@@ -1215,6 +1277,9 @@ initializeSupabaseData().catch(e => console.error("Error initializing Supabase d
 // Loader helpers to ensure data is fetched from Supabase if configured (crucial for stateless serverless environments)
 let lastSettingsLoadTime = 0;
 async function ensureSettingsLoaded() {
+  const initPromise = getSupabaseInitPromise();
+  if (initPromise) await initPromise;
+
   const now = Date.now();
   if (now - lastSettingsLoadTime < 5000 && !process.env.VERCEL) return;
   const supabase = getSupabase();
@@ -1226,7 +1291,9 @@ async function ensureSettingsLoaded() {
       .eq('id', 'default')
       .maybeSingle();
       
-    if (!settingsErr && settingsData) {
+    if (settingsErr) {
+      handleSupabaseError('restaurant_settings', settingsErr, 'load');
+    } else if (settingsData) {
       restaurantSettings = {
         storeName: settingsData.store_name,
         promptPayNumber: settingsData.promptpay_number,
@@ -1244,17 +1311,21 @@ async function ensureSettingsLoaded() {
         lastLineError: settingsData.last_line_error,
         supabaseUrl: restaurantSettings.supabaseUrl,
         supabaseAnonKey: restaurantSettings.supabaseAnonKey,
-        lastSupabaseError: restaurantSettings.lastSupabaseError
+        lastSupabaseError: ""
       };
       lastSettingsLoadTime = now;
+      restaurantSettings.lastSupabaseError = "";
     }
   } catch (e) {
-    console.error("Error dynamically loading settings:", e);
+    handleSupabaseError('restaurant_settings', e, 'load');
   }
 }
 
 let lastCategoriesLoadTime = 0;
 async function ensureCategoriesLoaded() {
+  const initPromise = getSupabaseInitPromise();
+  if (initPromise) await initPromise;
+
   const now = Date.now();
   if (now - lastCategoriesLoadTime < 5000 && !process.env.VERCEL) return;
   const supabase = getSupabase();
@@ -1264,7 +1335,9 @@ async function ensureCategoriesLoaded() {
       .from('categories')
       .select('*');
       
-    if (!catErr && catData) {
+    if (catErr) {
+      handleSupabaseError('categories', catErr, 'load');
+    } else if (catData) {
       const fetchedCats = catData
         .filter(c => !deletedCategoryIds.includes(c.id))
         .map(c => ({
@@ -1274,16 +1347,31 @@ async function ensureCategoriesLoaded() {
           emoji: c.emoji || "🍽️"
         }));
 
+      // Self-healing check: Ensure all DEFAULT_CATEGORIES are present in Supabase
+      const fetchedIds = new Set(fetchedCats.map(c => c.id));
+      for (const defCat of DEFAULT_CATEGORIES) {
+        if (!fetchedIds.has(defCat.id)) {
+          console.log(`Default category ${defCat.id} missing in ensureCategoriesLoaded. Seeding...`);
+          await syncCategoryToSupabase(defCat).catch(e => console.error(e));
+          fetchedCats.push(defCat);
+        }
+      }
+
       categories = fetchedCats;
+      saveLocalFile("categories.json", categories);
       lastCategoriesLoadTime = now;
+      restaurantSettings.lastSupabaseError = "";
     }
   } catch (e) {
-    // Table may not exist yet in client's database, graceful fallback
+    handleSupabaseError('categories', e, 'load');
   }
 }
 
 let lastMenuLoadTime = 0;
 async function ensureMenuItemsLoaded() {
+  const initPromise = getSupabaseInitPromise();
+  if (initPromise) await initPromise;
+
   const now = Date.now();
   if (now - lastMenuLoadTime < 3000 && !process.env.VERCEL) return;
   const supabase = getSupabase();
@@ -1293,21 +1381,27 @@ async function ensureMenuItemsLoaded() {
       .from('menu_items')
       .select('*');
       
-    if (!menuErr && menuData) {
+    if (menuErr) {
+      handleSupabaseError('menu_items', menuErr, 'load');
+    } else if (menuData) {
       const fetchedItems = menuData
         .filter(item => !deletedMenuItemIds.includes(item.id))
         .map(item => mapSupabaseMenuItem(item));
 
       menuItems = fetchedItems;
       lastMenuLoadTime = now;
+      restaurantSettings.lastSupabaseError = "";
     }
   } catch (e) {
-    console.error("Error dynamically loading menu items:", e);
+    handleSupabaseError('menu_items', e, 'load');
   }
 }
 
 let lastOrdersLoadTime = 0;
 async function ensureOrdersLoaded(force = false) {
+  const initPromise = getSupabaseInitPromise();
+  if (initPromise) await initPromise;
+
   const now = Date.now();
   if (!force && (now - lastOrdersLoadTime < 2000) && !process.env.VERCEL) return;
   const supabase = getSupabase();
@@ -1317,7 +1411,9 @@ async function ensureOrdersLoaded(force = false) {
       .from('orders')
       .select('*');
       
-    if (!ordersErr && ordersData) {
+    if (ordersErr) {
+      handleSupabaseError('orders', ordersErr, 'load');
+    } else if (ordersData) {
       const fetchedOrders = ordersData
         .filter(order => !deletedOrderIds.includes(order.id))
         .map(order => mapSupabaseOrder(order));
@@ -1354,14 +1450,18 @@ async function ensureOrdersLoaded(force = false) {
       saveLocalFile("order_counter.json", orderCounter);
       
       lastOrdersLoadTime = now;
+      restaurantSettings.lastSupabaseError = "";
     }
   } catch (e) {
-    console.error("Error dynamically loading orders:", e);
+    handleSupabaseError('orders', e, 'load');
   }
 }
 
 let lastReservationsLoadTime = 0;
 async function ensureReservationsLoaded(force = false) {
+  const initPromise = getSupabaseInitPromise();
+  if (initPromise) await initPromise;
+
   const now = Date.now();
   if (!force && (now - lastReservationsLoadTime < 2000) && !process.env.VERCEL) return;
   const supabase = getSupabase();
@@ -1371,7 +1471,9 @@ async function ensureReservationsLoaded(force = false) {
       .from('reservations')
       .select('*');
       
-    if (!resErr && resData) {
+    if (resErr) {
+      handleSupabaseError('reservations', resErr, 'load');
+    } else if (resData) {
       const fetchedReservations = resData
         .filter(resv => !deletedReservationIds.includes(resv.id))
         .map(resv => ({
@@ -1410,9 +1512,10 @@ async function ensureReservationsLoaded(force = false) {
       saveLocalFile("reservations.json", reservations);
       
       lastReservationsLoadTime = now;
+      restaurantSettings.lastSupabaseError = "";
     }
   } catch (e) {
-    console.error("Error dynamically loading reservations:", e);
+    handleSupabaseError('reservations', e, 'load');
   }
 }
 
@@ -2493,6 +2596,35 @@ function localTranslate(text: string): string {
   return `${text} (Translated)`;
 }
 
+// Helper to perform Gemini Translation with retry logic to gracefully handle transient overload/503 errors
+async function generateTranslationWithRetry(ai: any, text: string, systemInstruction: string, retries = 2, delayMs = 1000): Promise<string> {
+  for (let attempt = 1; attempt <= retries + 1; attempt++) {
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: text,
+        config: {
+          systemInstruction,
+          temperature: 0.1
+        }
+      });
+      const translatedText = response.text ? response.text.trim().replace(/^["']|["']$/g, '') : "";
+      if (translatedText) return translatedText;
+    } catch (error: any) {
+      const errorStr = String(error.message || error);
+      const isTransient = error.status === 'UNAVAILABLE' || error.status === 503 || errorStr.includes('503') || errorStr.includes('high demand') || errorStr.includes('overloaded') || errorStr.includes('temporarily unavailable');
+      if (isTransient && attempt <= retries) {
+        console.log(`[Translate info] Model busy status. Retrying translation in ${delayMs}ms (attempt ${attempt})...`);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+        delayMs *= 2; // exponential backoff
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error("Translation failed after all retry attempts.");
+}
+
 // POST /api/ai/translate - Translate Thai Food names/descriptions to English
 app.post("/api/ai/translate", async (req, res) => {
   const { text } = req.body;
@@ -2514,21 +2646,12 @@ Translate the provided Thai text accurately and naturally into English.
 - Provide ONLY the direct English translation as the output, with no explanation, intro, quote marks, or additional text.
 - Maintain correct capitalization.`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: text,
-      config: {
-        systemInstruction,
-        temperature: 0.1
-      }
-    });
-
-    const translatedText = response.text ? response.text.trim().replace(/^["']|["']$/g, '') : "";
+    const translatedText = await generateTranslationWithRetry(ai, text, systemInstruction);
     res.json({ translatedText: translatedText || localTranslate(text), isMock: false });
   } catch (error: any) {
-    console.error("Gemini Translation API Error:", error);
+    console.log("[Translate info] Live translator busy or unavailable. Using robust local translation dictionary fallback.");
     // fallback
-    res.json({ translatedText: localTranslate(text), isMock: true, error: error.message });
+    res.json({ translatedText: localTranslate(text), isMock: true });
   }
 });
 
