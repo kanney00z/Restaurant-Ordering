@@ -15,5 +15,5 @@
   "lastLineError": "",
   "supabaseUrl": "https://axmgnqcefaavzdabkeoz.supabase.co",
   "supabaseAnonKey": "sb_publishable_4gu_0x-VkDg2GaO5ciD9pw_fa_lU7Qd",
-  "lastSupabaseError": ""
+  "lastSupabaseError": "Could not find the 'emoji' column of 'categories' in the schema cache"
 }

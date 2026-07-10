@@ -714,6 +714,36 @@ function mapSupabaseMenuItem(item: any): MenuItem {
   };
 }
 
+function mapSupabaseCategory(c: any): Category {
+  let nameTh = c.name_th || "";
+  let nameEn = c.name_en || "";
+  let emoji = c.emoji || "🍽️";
+
+  if (c.name) {
+    try {
+      const parsed = typeof c.name === 'string' ? JSON.parse(c.name) : c.name;
+      if (parsed && typeof parsed === 'object') {
+        nameTh = parsed.th || parsed.nameTh || nameTh || c.name;
+        nameEn = parsed.en || parsed.nameEn || nameEn || c.name;
+        if (parsed.emoji) emoji = parsed.emoji;
+      } else {
+        nameTh = c.name;
+        nameEn = c.name;
+      }
+    } catch (e) {
+      nameTh = c.name;
+      nameEn = c.name;
+    }
+  }
+
+  return {
+    id: c.id,
+    nameTh: nameTh || "หมวดหมู่ไม่มีชื่อ",
+    nameEn: nameEn || "Unnamed Category",
+    emoji: emoji
+  };
+}
+
 function mapSupabaseOrder(order: any): Order {
   let orderNumber = order.order_number || order.id.replace("ORD-", "");
   let dineInType: 'dine-in' | 'delivery' = order.dine_in_type || "dine-in";
@@ -1025,13 +1055,26 @@ async function syncCategoryToSupabase(cat: Category) {
   const supabase = getSupabase();
   if (!supabase) return;
   try {
+    // 1. Try upserting using new schema columns
     const { error } = await supabase.from('categories').upsert({
       id: cat.id,
       name_th: cat.nameTh,
       name_en: cat.nameEn,
       emoji: cat.emoji || "🍽️"
     });
-    if (error) handleSupabaseError('categories', error, 'sync');
+    
+    if (error) {
+      // 2. Try falling back to old schema column
+      const { error: oldErr } = await supabase.from('categories').upsert({
+        id: cat.id,
+        name: JSON.stringify({ th: cat.nameTh, en: cat.nameEn, emoji: cat.emoji || "🍽️" })
+      });
+      if (oldErr) {
+        handleSupabaseError('categories', oldErr, 'sync_fallback');
+      } else {
+        console.log(`[Supabase] Category synced successfully to old schema for category: ${cat.id}`);
+      }
+    }
   } catch (e) {
     handleSupabaseError('categories', e, 'sync_exception');
   }
@@ -1114,28 +1157,33 @@ async function initializeSupabaseData() {
       } else {
         fetchedCats = (catData || [])
           .filter(c => !deletedCategoryIds.includes(c.id))
-          .map(c => ({
-            id: c.id,
-            nameTh: c.name_th,
-            nameEn: c.name_en,
-            emoji: c.emoji || "🍽️"
-          }));
+          .map(c => mapSupabaseCategory(c));
       }
     } catch (e) {
       console.error("Failed to query categories table:", e);
       handleSupabaseError('categories', e, 'load');
     }
 
-    // Self-healing check: Ensure all DEFAULT_CATEGORIES are present in the Supabase database
-    const fetchedIds = new Set(fetchedCats.map(c => c.id));
-    for (const defCat of DEFAULT_CATEGORIES) {
-      if (!fetchedIds.has(defCat.id)) {
-        console.log(`Default category ${defCat.id} missing from Supabase. Seeding...`);
-        await syncCategoryToSupabase(defCat).catch(e => console.error(e));
-        fetchedCats.push(defCat);
+    // Merge with local categories backup to prevent data loss if Supabase sync is failing
+    const localCats = loadLocalFile("categories.json", []);
+    const mergedCats = [...fetchedCats];
+    const fetchedCatIds = new Set(fetchedCats.map(c => c.id));
+    for (const localCat of localCats) {
+      if (!fetchedCatIds.has(localCat.id) && !deletedCategoryIds.includes(localCat.id)) {
+        mergedCats.push(localCat);
       }
     }
-    categories = fetchedCats;
+
+    // Self-healing check: Ensure all DEFAULT_CATEGORIES are present in the Supabase database
+    const finalCatIds = new Set(mergedCats.map(c => c.id));
+    for (const defCat of DEFAULT_CATEGORIES) {
+      if (!finalCatIds.has(defCat.id)) {
+        console.log(`Default category ${defCat.id} missing from Supabase. Seeding...`);
+        await syncCategoryToSupabase(defCat).catch(e => console.error(e));
+        mergedCats.push(defCat);
+      }
+    }
+    categories = mergedCats;
     saveLocalFile("categories.json", categories);
     console.log(`Initialized ${categories.length} categories.`);
 
@@ -1159,14 +1207,33 @@ async function initializeSupabaseData() {
       handleSupabaseError('menu_items', e, 'load');
     }
 
-    if (fetchedItems.length === 0) {
-      console.log("No menu items found in Supabase. Seeding default menu items...");
+    // Merge with local menu items backup to prevent data loss if Supabase sync is failing
+    const localItems = loadLocalFile("menu_items.json", []);
+    const mergedItems = [...fetchedItems];
+    const fetchedItemIds = new Set(fetchedItems.map(item => item.id));
+    for (const localItem of localItems) {
+      if (!fetchedItemIds.has(localItem.id) && !deletedMenuItemIds.includes(localItem.id)) {
+        mergedItems.push(localItem);
+      }
+    }
+
+    if (mergedItems.length === 0) {
+      console.log("No menu items found in Supabase or local backup. Seeding default menu items...");
       for (const item of DEFAULT_MENU_ITEMS) {
         await syncMenuItemToSupabase(item).catch(e => console.error(e));
       }
       menuItems = [...DEFAULT_MENU_ITEMS];
     } else {
-      menuItems = fetchedItems;
+      // Self-healing check: Ensure all DEFAULT_MENU_ITEMS are present
+      const finalItemIds = new Set(mergedItems.map(item => item.id));
+      for (const defItem of DEFAULT_MENU_ITEMS) {
+        if (!finalItemIds.has(defItem.id)) {
+          console.log(`Default menu item ${defItem.id} missing. Seeding...`);
+          await syncMenuItemToSupabase(defItem).catch(e => console.error(e));
+          mergedItems.push(defItem);
+        }
+      }
+      menuItems = mergedItems;
     }
     saveLocalFile("menu_items.json", menuItems);
     console.log(`Initialized ${menuItems.length} menu items.`);
@@ -1340,24 +1407,30 @@ async function ensureCategoriesLoaded() {
     } else if (catData) {
       const fetchedCats = catData
         .filter(c => !deletedCategoryIds.includes(c.id))
-        .map(c => ({
-          id: c.id,
-          nameTh: c.name_th,
-          nameEn: c.name_en,
-          emoji: c.emoji || "🍽️"
-        }));
+        .map(c => mapSupabaseCategory(c));
 
-      // Self-healing check: Ensure all DEFAULT_CATEGORIES are present in Supabase
+      // Merge with local categories backup to prevent data loss if Supabase sync is failing
+      const localCats = loadLocalFile("categories.json", []);
+      const mergedCats = [...fetchedCats];
       const fetchedIds = new Set(fetchedCats.map(c => c.id));
-      for (const defCat of DEFAULT_CATEGORIES) {
-        if (!fetchedIds.has(defCat.id)) {
-          console.log(`Default category ${defCat.id} missing in ensureCategoriesLoaded. Seeding...`);
-          await syncCategoryToSupabase(defCat).catch(e => console.error(e));
-          fetchedCats.push(defCat);
+      
+      for (const localCat of localCats) {
+        if (!fetchedIds.has(localCat.id) && !deletedCategoryIds.includes(localCat.id)) {
+          mergedCats.push(localCat);
         }
       }
 
-      categories = fetchedCats;
+      // Self-healing check: Ensure all DEFAULT_CATEGORIES are present
+      const finalIds = new Set(mergedCats.map(c => c.id));
+      for (const defCat of DEFAULT_CATEGORIES) {
+        if (!finalIds.has(defCat.id)) {
+          console.log(`Default category ${defCat.id} missing in ensureCategoriesLoaded. Seeding...`);
+          await syncCategoryToSupabase(defCat).catch(e => console.error(e));
+          mergedCats.push(defCat);
+        }
+      }
+
+      categories = mergedCats;
       saveLocalFile("categories.json", categories);
       lastCategoriesLoadTime = now;
       restaurantSettings.lastSupabaseError = "";
@@ -1388,7 +1461,19 @@ async function ensureMenuItemsLoaded() {
         .filter(item => !deletedMenuItemIds.includes(item.id))
         .map(item => mapSupabaseMenuItem(item));
 
-      menuItems = fetchedItems;
+      // Merge with local menu items backup to prevent data loss if Supabase sync is failing
+      const localItems = loadLocalFile("menu_items.json", []);
+      const mergedItems = [...fetchedItems];
+      const fetchedIds = new Set(fetchedItems.map(item => item.id));
+
+      for (const localItem of localItems) {
+        if (!fetchedIds.has(localItem.id) && !deletedMenuItemIds.includes(localItem.id)) {
+          mergedItems.push(localItem);
+        }
+      }
+
+      menuItems = mergedItems;
+      saveLocalFile("menu_items.json", menuItems);
       lastMenuLoadTime = now;
       restaurantSettings.lastSupabaseError = "";
     }

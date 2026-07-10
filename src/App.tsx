@@ -906,17 +906,42 @@ export default function App() {
   const handleCreateCategory = async (e: React.FormEvent) => {
     e.preventDefault();
     setCatActionError('');
-    if (!newCatTh.trim() || !newCatEn.trim()) {
+
+    let nameThVal = newCatTh.trim();
+    let nameEnVal = newCatEn.trim();
+
+    if (!nameThVal) {
+      setCatActionError('กรุณากรอกข้อมูลชื่อหมวดหมู่ภาษาไทย');
+      return;
+    }
+
+    // Auto-translate on-submit if English name is empty
+    if (!nameEnVal) {
+      setIsTranslatingCat(true);
+      try {
+        const translated = await translateText(nameThVal);
+        if (translated) {
+          nameEnVal = translated.trim();
+          setNewCatEn(translated);
+        }
+      } catch (err) {
+        console.error("Auto-translation failed:", err);
+      }
+      setIsTranslatingCat(false);
+    }
+
+    if (!nameThVal || !nameEnVal) {
       setCatActionError('กรุณากรอกข้อมูลภาษาไทยและภาษาอังกฤษ');
       return;
     }
+
     try {
       const res = await fetch('/api/categories', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          nameTh: newCatTh.trim(),
-          nameEn: newCatEn.trim(),
+          nameTh: nameThVal,
+          nameEn: nameEnVal,
           emoji: newCatEmoji || '🍽️'
         })
       });
@@ -1601,19 +1626,58 @@ export default function App() {
     e.preventDefault();
     setMenuActionError('');
 
-    if (!newMenuTh.trim() || !newMenuEn.trim() || !newPrice.trim()) {
+    let nameThVal = newMenuTh.trim();
+    let nameEnVal = newMenuEn.trim();
+    let priceVal = newPrice.trim();
+    let descThVal = newDescTh.trim();
+    let descEnVal = newDescEn.trim();
+
+    if (!nameThVal || !priceVal) {
+      setMenuActionError('กรุณากรอกข้อมูลชื่อภาษาไทยและราคาอาหาร');
+      return;
+    }
+
+    // Auto-translate on-submit if English name is empty
+    if (!nameEnVal) {
+      setIsTranslatingMenu(true);
+      try {
+        const translated = await translateText(nameThVal);
+        if (translated) {
+          nameEnVal = translated.trim();
+          setNewMenuEn(translated);
+        }
+      } catch (err) {
+        console.error("Auto-translation failed:", err);
+      }
+      setIsTranslatingMenu(false);
+    }
+
+    // Auto-translate description on-submit if English is empty
+    if (descThVal && !descEnVal) {
+      try {
+        const translated = await translateText(descThVal);
+        if (translated) {
+          descEnVal = translated.trim();
+          setNewDescEn(translated);
+        }
+      } catch (err) {
+        console.error("Auto-translation for description failed:", err);
+      }
+    }
+
+    if (!nameThVal || !nameEnVal || !priceVal) {
       setMenuActionError('กรุณากรอกข้อมูลที่จำเป็นให้ครบถ้วน');
       return;
     }
 
     try {
       const payload = {
-        nameTh: newMenuTh,
-        nameEn: newMenuEn,
-        descriptionTh: newDescTh,
-        descriptionEn: newDescEn,
-        price: Number(newPrice),
-        category: newCategory,
+        nameTh: nameThVal,
+        nameEn: nameEnVal,
+        descriptionTh: descThVal,
+        descriptionEn: descEnVal,
+        price: Number(priceVal),
+        category: newCategory || (categories.length > 0 ? categories[0].id : 'main'),
         image: newImage || undefined,
         prepTime: Number(newPrepTime) || 10,
         ingredients: newIngredients ? newIngredients.split(',').map(i => i.trim()) : [],
