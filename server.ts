@@ -59,6 +59,17 @@ function broadcast(type: string, payload?: any) {
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
+// CORS headers middleware
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, x-supabase-url, x-supabase-key");
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
 // Dynamic Supabase headers extraction middleware
 app.use((req, res, next) => {
   const url = req.headers['x-supabase-url'];
@@ -558,15 +569,17 @@ const DEFAULT_RESERVATIONS: Reservation[] = [
 ];
 
 // Initialize and restore seed data if the local files exist but are empty arrays
-let menuItems: MenuItem[] = loadLocalFile("menu_items.json", DEFAULT_MENU_ITEMS);
-if (!Array.isArray(menuItems) || (menuItems.length === 0 && deletedMenuItemIds.length === 0)) {
-  menuItems = [...DEFAULT_MENU_ITEMS];
+let rawMenuItems = loadLocalFile("menu_items.json", DEFAULT_MENU_ITEMS);
+if (!Array.isArray(rawMenuItems) || (rawMenuItems.length === 0 && deletedMenuItemIds.length === 0)) {
+  rawMenuItems = [...DEFAULT_MENU_ITEMS];
 }
+let menuItems: MenuItem[] = rawMenuItems.map((item: any) => mapSupabaseMenuItem(item));
 
-let categories: Category[] = loadLocalFile("categories.json", DEFAULT_CATEGORIES);
-if (!Array.isArray(categories) || (categories.length === 0 && deletedCategoryIds.length === 0)) {
-  categories = [...DEFAULT_CATEGORIES];
+let rawCategories = loadLocalFile("categories.json", DEFAULT_CATEGORIES);
+if (!Array.isArray(rawCategories) || (rawCategories.length === 0 && deletedCategoryIds.length === 0)) {
+  rawCategories = [...DEFAULT_CATEGORIES];
 }
+let categories: Category[] = rawCategories.map((c: any) => mapSupabaseCategory(c));
 
 let orders: Order[] = loadLocalFile("orders.json", DEFAULT_ORDERS);
 if (!Array.isArray(orders) || (orders.length === 0 && deletedOrderIds.length === 0)) {
@@ -667,42 +680,82 @@ function getSupabaseInitPromise() {
 // --- Dynamic Schema Mapping Helpers ---
 
 function mapSupabaseMenuItem(item: any): MenuItem {
-  let nameTh = item.name_th || "";
-  let nameEn = item.name_en || "";
+  let nameTh = item.name_th || item.nameTh || "";
+  let nameEn = item.name_en || item.nameEn || "";
   
+  const sanitizeJSONString = (val: any, lang: 'th' | 'en'): string => {
+    if (typeof val !== 'string') return "";
+    const trimmed = val.trim();
+    if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (parsed && typeof parsed === 'object') {
+          const nested = parsed[lang] !== undefined ? parsed[lang] : parsed;
+          return typeof nested === 'string' ? nested : (typeof nested === 'object' ? JSON.stringify(nested) : String(nested));
+        }
+      } catch (e) {
+        // ignore, fall back
+      }
+    }
+    return val;
+  };
+
+  nameTh = sanitizeJSONString(nameTh, 'th');
+  nameEn = sanitizeJSONString(nameEn, 'en');
+
   if (!nameTh && item.name) {
     try {
-      const parsedName = JSON.parse(item.name);
-      nameTh = parsedName.th || item.name;
-      nameEn = parsedName.en || item.name;
+      const parsedName = typeof item.name === 'string' && item.name.trim().startsWith('{') ? JSON.parse(item.name) : item.name;
+      if (parsedName && typeof parsedName === 'object') {
+        nameTh = parsedName.th || parsedName.nameTh || item.name;
+        nameEn = parsedName.en || parsedName.nameEn || item.name;
+      } else {
+        nameTh = item.name;
+        nameEn = item.name;
+      }
     } catch (e) {
       nameTh = item.name || "";
       nameEn = item.name || "";
     }
   }
 
-  let descriptionTh = item.description_th || "";
-  let descriptionEn = item.description_en || "";
-  let isPopular = item.is_popular === true;
-  let prepTime = item.prep_time || 15;
+  let descriptionTh = item.description_th || item.descriptionTh || "";
+  let descriptionEn = item.description_en || item.descriptionEn || "";
+  
+  descriptionTh = sanitizeJSONString(descriptionTh, 'th');
+  descriptionEn = sanitizeJSONString(descriptionEn, 'en');
+
+  let isPopular = item.is_popular === true || item.isPopular === true;
+  let prepTime = item.prep_time || item.prepTime || 15;
   let ingredients = Array.isArray(item.ingredients) ? item.ingredients : [];
 
   if (!descriptionTh && item.description) {
     try {
-      const parsedDesc = JSON.parse(item.description);
-      descriptionTh = parsedDesc.th || item.description;
-      descriptionEn = parsedDesc.en || item.description;
-      isPopular = parsedDesc.isPopular === true;
-      prepTime = parsedDesc.prepTime || 15;
-      ingredients = parsedDesc.ingredients || [];
+      const parsedDesc = typeof item.description === 'string' && item.description.trim().startsWith('{') ? JSON.parse(item.description) : item.description;
+      if (parsedDesc && typeof parsedDesc === 'object') {
+        descriptionTh = parsedDesc.th || parsedDesc.descriptionTh || "";
+        descriptionEn = parsedDesc.en || parsedDesc.descriptionEn || "";
+        if (parsedDesc.isPopular !== undefined) isPopular = parsedDesc.isPopular === true;
+        if (parsedDesc.prepTime !== undefined) prepTime = parsedDesc.prepTime || 15;
+        if (parsedDesc.ingredients !== undefined) ingredients = parsedDesc.ingredients || [];
+      } else {
+        descriptionTh = item.description || "";
+        descriptionEn = item.description || "";
+      }
     } catch (e) {
       descriptionTh = item.description || "";
       descriptionEn = item.description || "";
     }
   }
 
-  const inStock = item.in_stock !== undefined ? item.in_stock === true : (item.available !== false);
-  const optionGroups = item.option_groups || item.options || [];
+  // Double sanitize names and descriptions to ensure they are fully cleaned of any JSON string leftovers
+  nameTh = sanitizeJSONString(nameTh, 'th');
+  nameEn = sanitizeJSONString(nameEn, 'en');
+  descriptionTh = sanitizeJSONString(descriptionTh, 'th');
+  descriptionEn = sanitizeJSONString(descriptionEn, 'en');
+
+  const inStock = item.in_stock !== undefined ? item.in_stock === true : (item.inStock !== undefined ? item.inStock === true : item.available !== false);
+  const optionGroups = item.option_groups || item.optionGroups || item.options || [];
 
   return {
     id: item.id,
@@ -1172,7 +1225,7 @@ async function initializeSupabaseData() {
     }
 
     // Merge with local categories backup to prevent data loss if Supabase sync is failing
-    const localCats = loadLocalFile("categories.json", []);
+    const localCats = loadLocalFile("categories.json", []).map((c: any) => mapSupabaseCategory(c));
     const mergedCats = [...fetchedCats];
     const fetchedCatIds = new Set(fetchedCats.map(c => c.id));
     for (const localCat of localCats) {
@@ -1215,7 +1268,7 @@ async function initializeSupabaseData() {
     }
 
     // Merge with local menu items backup to prevent data loss if Supabase sync is failing
-    const localItems = loadLocalFile("menu_items.json", []);
+    const localItems = loadLocalFile("menu_items.json", []).map((item: any) => mapSupabaseMenuItem(item));
     const mergedItems = [...fetchedItems];
     const fetchedItemIds = new Set(fetchedItems.map(item => item.id));
     for (const localItem of localItems) {
@@ -1417,7 +1470,7 @@ async function ensureCategoriesLoaded() {
         .map(c => mapSupabaseCategory(c));
 
       // Merge with local categories backup to prevent data loss if Supabase sync is failing
-      const localCats = loadLocalFile("categories.json", []);
+      const localCats = loadLocalFile("categories.json", []).map((c: any) => mapSupabaseCategory(c));
       const mergedCats = [...fetchedCats];
       const fetchedIds = new Set(fetchedCats.map(c => c.id));
       
@@ -1469,7 +1522,7 @@ async function ensureMenuItemsLoaded() {
         .map(item => mapSupabaseMenuItem(item));
 
       // Merge with local menu items backup to prevent data loss if Supabase sync is failing
-      const localItems = loadLocalFile("menu_items.json", []);
+      const localItems = loadLocalFile("menu_items.json", []).map((item: any) => mapSupabaseMenuItem(item));
       const mergedItems = [...fetchedItems];
       const fetchedIds = new Set(fetchedItems.map(item => item.id));
 
