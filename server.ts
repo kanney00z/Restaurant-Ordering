@@ -186,16 +186,24 @@ function saveLocalFile(filename: string, data: any) {
 function loadLocalFile(filename: string, defaultValue: any) {
   try {
     const filePath = path.join(DATA_DIR, filename);
+    let parsed: any = null;
     if (fs.existsSync(filePath)) {
       const content = fs.readFileSync(filePath, "utf8");
-      return JSON.parse(content);
+      parsed = JSON.parse(content);
+    } else {
+      // Read-only fallback to process.cwd() for environments like Vercel where DATA_DIR is /tmp
+      const fallbackPath = path.join(process.cwd(), filename);
+      if (fallbackPath !== filePath && fs.existsSync(fallbackPath)) {
+        const content = fs.readFileSync(fallbackPath, "utf8");
+        parsed = JSON.parse(content);
+      }
     }
-    
-    // Read-only fallback to process.cwd() for environments like Vercel where DATA_DIR is /tmp
-    const fallbackPath = path.join(process.cwd(), filename);
-    if (fallbackPath !== filePath && fs.existsSync(fallbackPath)) {
-      const content = fs.readFileSync(fallbackPath, "utf8");
-      return JSON.parse(content);
+    if (parsed !== null && parsed !== undefined) {
+      if (Array.isArray(defaultValue) && !Array.isArray(parsed)) {
+        console.warn(`[LoadLocalFile Warning] ${filename} expected array but got:`, parsed);
+        return defaultValue;
+      }
+      return parsed;
     }
   } catch (e) {
     console.error(`Error loading local file ${filename}:`, e);
@@ -640,7 +648,10 @@ function getSupabase() {
       const isFirstInitOrChanged = !cachedSupabaseClient || url !== lastSupabaseUrl || key !== lastSupabaseKey;
       lastSupabaseUrl = url;
       lastSupabaseKey = key;
-      cachedSupabaseClient = createClient(url, key);
+      cachedSupabaseClient = createClient(url, key, {
+        auth: { persistSession: false },
+        global: { fetch: globalThis.fetch }
+      });
       
       if (isFirstInitOrChanged) {
         console.log(`[Supabase] Client initialized for URL: ${url}. Triggering lazy-loaded data initialization and seeding...`);
@@ -1184,28 +1195,52 @@ async function initializeSupabaseData() {
     return;
   }
   
-  console.log("Supabase configured! Loading and seeding data...");
+  console.log("Supabase configured! Loading and seeding data in parallel...");
 
   try {
-    // 1. Load Settings
-    let settingsDataSuccess = false;
-    let settingsData: any = null;
-    try {
-      const response = await withTimeout(
+    // Query all tables in parallel with a low timeout (2000ms) to prevent cascading timeouts from locking the server
+    const [settingsResponse, categoriesResponse, menuItemsResponse, ordersResponse, reservationsResponse] = await Promise.all([
+      withTimeout(
         supabase.from('restaurant_settings').select('*').eq('id', 'default').maybeSingle(),
-        1500,
+        2000,
         { data: null, error: { message: "timeout" } as any },
         "Init Settings Query"
-      );
-      if (response && !response.error) {
-        settingsDataSuccess = true;
-        settingsData = response.data;
-      } else if (response && response.error) {
-        console.error("Error reading settings from Supabase:", response.error);
-        handleSupabaseError('restaurant_settings', response.error, 'load');
-      }
-    } catch (e) {
-      console.error("Exception reading settings from Supabase:", e);
+      ),
+      withTimeout(
+        supabase.from('categories').select('*'),
+        2000,
+        { data: null, error: { message: "timeout" } as any },
+        "Init Categories Query"
+      ),
+      withTimeout(
+        supabase.from('menu_items').select('*'),
+        2000,
+        { data: null, error: { message: "timeout" } as any },
+        "Init Menu Query"
+      ),
+      withTimeout(
+        supabase.from('orders').select('*'),
+        2000,
+        { data: null, error: { message: "timeout" } as any },
+        "Init Orders Query"
+      ),
+      withTimeout(
+        supabase.from('reservations').select('*'),
+        2000,
+        { data: null, error: { message: "timeout" } as any },
+        "Init Reservations Query"
+      )
+    ]);
+
+    // 1. Process Settings
+    let settingsDataSuccess = false;
+    let settingsData: any = null;
+    if (settingsResponse && !settingsResponse.error) {
+      settingsDataSuccess = true;
+      settingsData = settingsResponse.data;
+    } else if (settingsResponse && settingsResponse.error) {
+      console.error("Error reading settings from Supabase:", settingsResponse.error);
+      handleSupabaseError('restaurant_settings', settingsResponse.error, 'load');
     }
 
     if (settingsDataSuccess && settingsData) {
@@ -1234,29 +1269,17 @@ async function initializeSupabaseData() {
       await syncSettingsToSupabase().catch(e => console.error(e));
     }
 
-    // 2. Load Categories First (needed for menu items)
+    // 2. Process Categories
     let catDataSuccess = false;
     let fetchedCats: Category[] = [];
-    try {
-      const response = await withTimeout(
-        supabase.from('categories').select('*'),
-        1500,
-        { data: null, error: { message: "timeout" } as any },
-        "Init Categories Query"
-      );
-        
-      if (response && response.error) {
-        console.error("Error loading categories from Supabase:", response.error);
-        handleSupabaseError('categories', response.error, 'load');
-      } else if (response && response.data) {
-        catDataSuccess = true;
-        fetchedCats = (response.data || [])
-          .filter(c => !deletedCategoryIds.includes(c.id))
-          .map(c => mapSupabaseCategory(c));
-      }
-    } catch (e) {
-      console.error("Failed to query categories table:", e);
-      handleSupabaseError('categories', e, 'load');
+    if (categoriesResponse && categoriesResponse.error) {
+      console.error("Error loading categories from Supabase:", categoriesResponse.error);
+      handleSupabaseError('categories', categoriesResponse.error, 'load');
+    } else if (categoriesResponse && categoriesResponse.data) {
+      catDataSuccess = true;
+      fetchedCats = (categoriesResponse.data || [])
+        .filter(c => !deletedCategoryIds.includes(c.id))
+        .map(c => mapSupabaseCategory(c));
     }
 
     // Merge with local categories backup to prevent data loss if Supabase sync is failing
@@ -1288,29 +1311,17 @@ async function initializeSupabaseData() {
     saveLocalFile("categories.json", categories);
     console.log(`Initialized ${categories.length} categories.`);
 
-    // 3. Load Menu Items
+    // 3. Process Menu Items
     let menuDataSuccess = false;
     let fetchedItems: MenuItem[] = [];
-    try {
-      const response = await withTimeout(
-        supabase.from('menu_items').select('*'),
-        1500,
-        { data: null, error: { message: "timeout" } as any },
-        "Init Menu Query"
-      );
-        
-      if (response && response.error) {
-        console.error("Error loading menu from Supabase:", response.error);
-        handleSupabaseError('menu_items', response.error, 'load');
-      } else if (response && response.data) {
-        menuDataSuccess = true;
-        fetchedItems = (response.data || [])
-          .filter(item => !deletedMenuItemIds.includes(item.id))
-          .map(item => mapSupabaseMenuItem(item));
-      }
-    } catch (e) {
-      console.error("Failed to query menu_items table:", e);
-      handleSupabaseError('menu_items', e, 'load');
+    if (menuItemsResponse && menuItemsResponse.error) {
+      console.error("Error loading menu from Supabase:", menuItemsResponse.error);
+      handleSupabaseError('menu_items', menuItemsResponse.error, 'load');
+    } else if (menuItemsResponse && menuItemsResponse.data) {
+      menuDataSuccess = true;
+      fetchedItems = (menuItemsResponse.data || [])
+        .filter(item => !deletedMenuItemIds.includes(item.id))
+        .map(item => mapSupabaseMenuItem(item));
     }
 
     // Merge with local menu items backup to prevent data loss if Supabase sync is failing
@@ -1342,29 +1353,17 @@ async function initializeSupabaseData() {
     saveLocalFile("menu_items.json", menuItems);
     console.log(`Initialized ${menuItems.length} menu items.`);
 
-    // 4. Load Orders
+    // 4. Process Orders
     let ordersDataSuccess = false;
     let fetchedOrders: Order[] = [];
-    try {
-      const response = await withTimeout(
-        supabase.from('orders').select('*'),
-        1500,
-        { data: null, error: { message: "timeout" } as any },
-        "Init Orders Query"
-      );
-        
-      if (response && response.error) {
-        console.error("Error loading orders from Supabase:", response.error);
-        handleSupabaseError('orders', response.error, 'load');
-      } else if (response && response.data) {
-        ordersDataSuccess = true;
-        fetchedOrders = (response.data || [])
-          .filter(order => !deletedOrderIds.includes(order.id))
-          .map(order => mapSupabaseOrder(order));
-      }
-    } catch (e) {
-      console.error("Failed to query orders table:", e);
-      handleSupabaseError('orders', e, 'load');
+    if (ordersResponse && ordersResponse.error) {
+      console.error("Error loading orders from Supabase:", ordersResponse.error);
+      handleSupabaseError('orders', ordersResponse.error, 'load');
+    } else if (ordersResponse && ordersResponse.data) {
+      ordersDataSuccess = true;
+      fetchedOrders = (ordersResponse.data || [])
+        .filter(order => !deletedOrderIds.includes(order.id))
+        .map(order => mapSupabaseOrder(order));
     }
 
     if (fetchedOrders.length === 0 && ordersDataSuccess) {
@@ -1390,40 +1389,28 @@ async function initializeSupabaseData() {
     saveLocalFile("order_counter.json", orderCounter);
     console.log(`Initialized ${orders.length} orders. Next OrderCounter: ${orderCounter}`);
 
-    // 5. Load Reservations
+    // 5. Process Reservations
     let resDataSuccess = false;
     let fetchedReservations: Reservation[] = [];
-    try {
-      const response = await withTimeout(
-        supabase.from('reservations').select('*'),
-        1500,
-        { data: null, error: { message: "timeout" } as any },
-        "Init Reservations Query"
-      );
-        
-      if (response && response.error) {
-        console.error("Error loading reservations from Supabase:", response.error);
-        handleSupabaseError('reservations', response.error, 'load');
-      } else if (response && response.data) {
-        resDataSuccess = true;
-        fetchedReservations = (response.data || [])
-          .filter(resv => !deletedReservationIds.includes(resv.id))
-          .map(resv => ({
-            id: resv.id,
-            customerName: resv.customer_name,
-            phone: resv.phone,
-            date: resv.date,
-            time: resv.time,
-            partySize: Number(resv.party_size),
-            tablePreference: resv.table_preference,
-            specialRequest: resv.special_request,
-            status: resv.status,
-            timestamp: resv.timestamp
-          }));
-      }
-    } catch (e) {
-      console.error("Failed to query reservations table:", e);
-      handleSupabaseError('reservations', e, 'load');
+    if (reservationsResponse && reservationsResponse.error) {
+      console.error("Error loading reservations from Supabase:", reservationsResponse.error);
+      handleSupabaseError('reservations', reservationsResponse.error, 'load');
+    } else if (reservationsResponse && reservationsResponse.data) {
+      resDataSuccess = true;
+      fetchedReservations = (reservationsResponse.data || [])
+        .filter(resv => !deletedReservationIds.includes(resv.id))
+        .map(resv => ({
+          id: resv.id,
+          customerName: resv.customer_name,
+          phone: resv.phone,
+          date: resv.date,
+          time: resv.time,
+          partySize: Number(resv.party_size),
+          tablePreference: resv.table_preference,
+          specialRequest: resv.special_request,
+          status: resv.status,
+          timestamp: resv.timestamp
+        }));
     }
 
     if (fetchedReservations.length === 0 && resDataSuccess) {
@@ -1460,15 +1447,17 @@ async function initializeSupabaseData() {
   }
 }
 
-// Initialize Supabase data immediately on start
-initializeSupabaseData().catch(e => console.error("Error initializing Supabase data on start:", e));
+// Initialize Supabase data immediately on start if not running on Vercel
+if (!process.env.VERCEL) {
+  initializeSupabaseData().catch(e => console.error("Error initializing Supabase data on start:", e));
+}
 
 // Loader helpers to ensure data is fetched from Supabase if configured (crucial for stateless serverless environments)
 let lastSettingsLoadTime = 0;
 async function ensureSettingsLoaded() {
   const initPromise = getSupabaseInitPromise();
   if (initPromise) {
-    await withTimeout(initPromise, 1200, undefined, "Supabase Init (Settings Loader)");
+    await withTimeout(initPromise, 1500, undefined, "Supabase Init (Settings Loader)");
   }
 
   const now = Date.now();
@@ -1517,7 +1506,7 @@ let lastCategoriesLoadTime = 0;
 async function ensureCategoriesLoaded() {
   const initPromise = getSupabaseInitPromise();
   if (initPromise) {
-    await withTimeout(initPromise, 1200, undefined, "Supabase Init (Categories Loader)");
+    await withTimeout(initPromise, 1500, undefined, "Supabase Init (Categories Loader)");
   }
 
   const now = Date.now();
@@ -1575,7 +1564,7 @@ let lastMenuLoadTime = 0;
 async function ensureMenuItemsLoaded() {
   const initPromise = getSupabaseInitPromise();
   if (initPromise) {
-    await withTimeout(initPromise, 1200, undefined, "Supabase Init (Menu Loader)");
+    await withTimeout(initPromise, 1500, undefined, "Supabase Init (Menu Loader)");
   }
 
   const now = Date.now();
@@ -1623,7 +1612,7 @@ let lastOrdersLoadTime = 0;
 async function ensureOrdersLoaded(force = false) {
   const initPromise = getSupabaseInitPromise();
   if (initPromise) {
-    await withTimeout(initPromise, 1200, undefined, "Supabase Init (Orders Loader)");
+    await withTimeout(initPromise, 1500, undefined, "Supabase Init (Orders Loader)");
   }
 
   const now = Date.now();
@@ -1689,7 +1678,7 @@ let lastReservationsLoadTime = 0;
 async function ensureReservationsLoaded(force = false) {
   const initPromise = getSupabaseInitPromise();
   if (initPromise) {
-    await withTimeout(initPromise, 1200, undefined, "Supabase Init (Reservations Loader)");
+    await withTimeout(initPromise, 1500, undefined, "Supabase Init (Reservations Loader)");
   }
 
   const now = Date.now();

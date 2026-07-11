@@ -1,1 +1,26 @@
-[]
+[
+  {
+    "id": "RES-2002",
+    "customerName": "Mr. Jack Robinson",
+    "phone": "082-111-2222",
+    "date": "2026-07-07",
+    "time": "18:30",
+    "partySize": 2,
+    "tablePreference": "โซนเงียบสงบ (Quiet Zone)",
+    "specialRequest": "Anniversary dinner, quiet spot please",
+    "status": "pending",
+    "timestamp": "2026-07-10T11:54:57.031Z"
+  },
+  {
+    "id": "RES-2001",
+    "customerName": "คุณวิภาวี",
+    "phone": "089-999-8888",
+    "date": "2026-07-06",
+    "time": "19:00",
+    "partySize": 4,
+    "tablePreference": "โซนริมหน้าต่าง (Window Seat)",
+    "specialRequest": "เลี้ยงฉลองวันเกิด มีเค้กมาเองค่ะ",
+    "status": "confirmed",
+    "timestamp": "2026-07-10T06:54:57.031Z"
+  }
+]
