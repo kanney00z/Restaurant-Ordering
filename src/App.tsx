@@ -195,7 +195,7 @@ export default function App() {
     let finalInput = input;
     if (typeof input === 'string' && input.startsWith('/api')) {
       const hostname = window.location.hostname;
-      if (hostname.includes('vercel.app') || hostname === 'localhost' || hostname === '127.0.0.1') {
+      if (hostname.includes('vercel.app')) {
         finalInput = 'https://ais-pre-dpbgtnjbao4uqwlj2qxcil-361727948318.asia-southeast1.run.app' + input;
       }
     }
