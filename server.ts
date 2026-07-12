@@ -818,8 +818,8 @@ function mapSupabaseMenuItem(item: any): MenuItem {
 }
 
 function mapSupabaseCategory(c: any): Category {
-  let nameTh = c.name_th || "";
-  let nameEn = c.name_en || "";
+  let nameTh = c.name_th || c.nameTh || "";
+  let nameEn = c.name_en || c.nameEn || "";
   let emoji = c.emoji || "🍽️";
 
   if (c.name) {
@@ -2656,6 +2656,64 @@ app.post("/api/settings", async (req, res) => {
   broadcast("settings-updated");
 
   res.json(restaurantSettings);
+});
+
+// POST /api/supabase/push-local-data - Push all current local state to Supabase
+app.post("/api/supabase/push-local-data", async (req, res) => {
+  const supabase = getSupabase();
+  if (!supabase) {
+    return res.status(400).json({ error: "ยังไม่ได้ระบุ/ตั้งค่าเชื่อมต่อกับฐานข้อมูล Supabase หรือฐานข้อมูลถูกระงับชั่วคราว" });
+  }
+
+  try {
+    console.log("Starting full manual sync of local data to Supabase...");
+    
+    // Ensure all local data is loaded
+    await ensureSettingsLoaded();
+    await ensureCategoriesLoaded();
+    await ensureMenuItemsLoaded();
+    await ensureOrdersLoaded(true);
+    await ensureReservationsLoaded(true);
+
+    // 1. Sync Settings
+    await syncSettingsToSupabase();
+
+    // 2. Sync Categories
+    for (const cat of categories) {
+      await syncCategoryToSupabase(cat);
+    }
+
+    // 3. Sync Menu Items
+    for (const item of menuItems) {
+      await syncMenuItemToSupabase(item);
+    }
+
+    // 4. Sync Orders
+    for (const order of orders) {
+      await syncOrderToSupabase(order);
+    }
+
+    // 5. Sync Reservations
+    for (const resv of reservations) {
+      await syncReservationToSupabase(resv);
+    }
+
+    // Clear any previous error as synchronization succeeded beautifully!
+    restaurantSettings.lastSupabaseError = "";
+    saveLocalFile("restaurant_settings.json", restaurantSettings);
+
+    // Broadcast update so all connected clients get refreshed
+    broadcast("settings-updated");
+    broadcast("categories-updated");
+    broadcast("menu-updated");
+    broadcast("orders-updated");
+    broadcast("reservations-updated");
+
+    res.json({ success: true, message: "อัปโหลดข้อมูลจากระบบหลังบ้านไปยัง Supabase สำเร็จครบทุกหมวดหมู่แล้ว!" });
+  } catch (error: any) {
+    console.error("Full manual sync failed:", error);
+    res.status(500).json({ error: error.message || "เกิดข้อผิดพลาดในการส่งข้อมูลไปยังฐานข้อมูล" });
+  }
 });
 
 // GET /api/reservations - Get all reservations

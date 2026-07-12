@@ -186,6 +186,9 @@ export default function App() {
   const [editSupabaseAnonKey, setEditSupabaseAnonKey] = useState('');
   const [settingsSuccessMsg, setSettingsSuccessMsg] = useState('');
   const [hasInitializedSettings, setHasInitializedSettings] = useState(false);
+  const [syncLoading, setSyncLoading] = useState(false);
+  const [syncSuccessMsg, setSyncSuccessMsg] = useState('');
+  const [syncErrorMsg, setSyncErrorMsg] = useState('');
 
   // Scoped fetch wrapper for API requests that dynamically injects Supabase headers for stateless serverless environments
   const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -202,6 +205,30 @@ export default function App() {
     
     const method = (init?.method || 'GET').toUpperCase();
     
+    const processResponse = (response: Response): Response => {
+      const contentType = response.headers.get('content-type');
+      const inputStr = typeof input === 'string' ? input : (input && 'url' in input ? (input as any).url : String(input));
+      const isApiRoute = inputStr.includes('/api/');
+      const isHtml = contentType && (contentType.includes('text/html') || contentType.includes('text/plain')) && !contentType.includes('application/json');
+      
+      if (isApiRoute && isHtml) {
+        return new Proxy(response, {
+          get(target, prop, receiver) {
+            if (prop === 'ok') return false;
+            if (prop === 'status') return 503;
+            if (prop === 'json') {
+              return async () => {
+                throw new Error("Received HTML/Plain-text response instead of JSON. Server might be restarting or offline.");
+              };
+            }
+            const value = Reflect.get(target, prop, receiver);
+            return typeof value === 'function' ? value.bind(target) : value;
+          }
+        });
+      }
+      return response;
+    };
+    
     if (method === 'GET') {
       let lastErr: any;
       const maxRetries = 3;
@@ -212,7 +239,7 @@ export default function App() {
             ...init,
             headers
           });
-          return response;
+          return processResponse(response);
         } catch (err) {
           lastErr = err;
           if (attempt < maxRetries) {
@@ -224,10 +251,11 @@ export default function App() {
       }
       throw lastErr;
     } else {
-      return window.fetch(input, {
+      const response = await window.fetch(input, {
         ...init,
         headers
       });
+      return processResponse(response);
     }
   };
 
@@ -925,6 +953,35 @@ export default function App() {
       }
     } catch (err) {
       console.error("Error updating settings:", err);
+    }
+  };
+
+  const handlePushLocalDataToSupabase = async () => {
+    setSyncLoading(true);
+    setSyncSuccessMsg('');
+    setSyncErrorMsg('');
+    try {
+      const res = await fetch('/api/supabase/push-local-data', {
+        method: 'POST'
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setSyncSuccessMsg(data.message || 'อัปโหลดข้อมูลปัจจุบันไปยัง Database สำเร็จแล้ว!');
+        // Refresh local data to match synced database
+        await fetchMenu();
+        await fetchCategories();
+        await fetchSettings();
+        await fetchOrders(true);
+        await fetchReservations(true);
+        await fetchAnalytics();
+      } else {
+        setSyncErrorMsg(data.error || 'ไม่สามารถอัปโหลดข้อมูลไปยัง Database ได้ กรุณาตรวจสอบการสร้างตารางและสิทธิ์ RLS');
+      }
+    } catch (err: any) {
+      console.error("Error pushing local data to Supabase:", err);
+      setSyncErrorMsg('เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์ หรือโปรเจกต์ Supabase กำลังเริ่มทำงานใหม่');
+    } finally {
+      setSyncLoading(false);
     }
   };
 
@@ -3880,9 +3937,17 @@ export default function App() {
 
                       {settings.lastSupabaseError && (
                         <div className="bg-rose-500/10 border border-rose-500/20 p-2.5 rounded-lg text-[9px] text-rose-400 font-sans flex flex-col gap-1.5 animate-fadeIn">
-                          <span className="font-bold flex items-center gap-1">⚠️ ปัญหาการเชื่อมต่อ / สิทธิ์การบันทึกข้อมูล (Supabase Sync Error):</span>
+                          <span className="font-bold flex items-center gap-1">
+                            {settings.lastSupabaseError.toLowerCase().includes('timeout') || settings.lastSupabaseError.toLowerCase().includes('fallback')
+                              ? "⚠️ หมดเวลาเชื่อมต่อ / โปรเจกต์อาจถูกระงับชั่วคราว (Supabase Paused):"
+                              : "⚠️ ปัญหาการเชื่อมต่อ / สิทธิ์การบันทึกข้อมูล (Supabase Sync Error):"}
+                          </span>
                           <span className="font-mono break-all bg-black/30 p-1.5 rounded text-rose-300">{settings.lastSupabaseError}</span>
-                          <span className="text-slate-400">กรุณาตรวจสอบว่าคุณได้สร้างตาราง รัน SQL Script และ<strong>สั่งปิด Row Level Security (RLS)</strong> พร้อมทั้งแกรนต์สิทธิ์ตามสคริปต์ SQL คู่มือด้านล่างเรียบร้อยแล้วในเมนู SQL Editor ของคอนโซล Supabase</span>
+                          <span className="text-slate-400">
+                            {settings.lastSupabaseError.toLowerCase().includes('timeout') || settings.lastSupabaseError.toLowerCase().includes('fallback')
+                              ? "โปรเจกต์ Supabase ของคุณอาจถูกระงับชั่วคราวเนื่องจากไม่มีกิจกรรมเคลื่อนไหว (Paused due to inactivity) หรืออยู่ระหว่างการเริ่มต้นใหม่ กรุณาเข้าหน้าแดชบอร์ด Supabase เพื่อทำรายการกู้คืนโปรเจกต์ (Restore) หรือตรวจสอบความถูกต้องของ URL และ Anon Public Key"
+                              : "กรุณาตรวจสอบว่าคุณได้สร้างตาราง รัน SQL Script และสั่งปิด Row Level Security (RLS) พร้อมทั้งแกรนต์สิทธิ์ตามสคริปต์ SQL คู่มือด้านล่างเรียบร้อยแล้วในเมนู SQL Editor ของคอนโซล Supabase"}
+                          </span>
                         </div>
                       )}
 
@@ -4109,6 +4174,27 @@ grant all on categories to anon, authenticated, service_role;`);
                         >
                           📋 คัดลอกโค้ด SQL ทั้งหมด
                         </button>
+                      </div>
+
+                      <div className="bg-slate-950 p-2.5 rounded-lg border border-orange-500/20 space-y-2">
+                        <span className="block text-[9px] font-bold text-orange-400 font-sans">🔄 อัปโหลดข้อมูลที่มีอยู่ไปยัง Database (Supabase Sync):</span>
+                        <p className="text-[8px] text-slate-400 font-sans leading-relaxed">
+                          หากท่านใช้ฐานข้อมูล (Database) ตัวใหม่ที่ยังไม่มีข้อมูลเลย สามารถคลิกปุ่มด้านล่างเพื่ออัปโหลดเมนูอาหาร, หมวดหมู่, และการตั้งค่าทั้งหมดจากเว็บที่มีอยู่ตอนนี้เข้าสู่ฐานข้อมูลใหม่ได้ทันที:
+                        </p>
+                        <button
+                          type="button"
+                          disabled={syncLoading}
+                          onClick={handlePushLocalDataToSupabase}
+                          className="w-full bg-orange-600/20 hover:bg-orange-600/40 text-orange-400 hover:text-white border border-orange-500/30 text-[9px] font-bold py-1.5 rounded transition-all flex items-center justify-center gap-1 cursor-pointer disabled:opacity-50"
+                        >
+                          {syncLoading ? '⏳ กำลังอัปโหลดข้อมูล...' : '📤 อัปโหลดข้อมูลปัจจุบันไปยัง Database'}
+                        </button>
+                        {syncSuccessMsg && (
+                          <p className="text-[8px] text-emerald-400 font-bold text-center mt-1 animate-fadeIn">✓ {syncSuccessMsg}</p>
+                        )}
+                        {syncErrorMsg && (
+                          <p className="text-[8px] text-rose-400 font-bold text-center mt-1 animate-fadeIn">✗ {syncErrorMsg}</p>
+                        )}
                       </div>
                     </div>
 
