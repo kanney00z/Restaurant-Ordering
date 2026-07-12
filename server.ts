@@ -601,6 +601,8 @@ if (!Array.isArray(reservations) || (reservations.length === 0 && deletedReserva
 
 let orderCounter = loadLocalFile("order_counter.json", 1004);
 
+let dbAlreadyInitialized = false;
+
 // Track very recent local modifications to prevent database-fetch race conditions and flickering
 const localOrderUpdates = new Map<string, { timestamp: number, order: Order }>();
 const localReservationUpdates = new Map<string, { timestamp: number, reservation: Reservation }>();
@@ -1296,6 +1298,8 @@ async function initializeSupabaseData() {
       await syncSettingsToSupabase().catch(e => console.error(e));
     }
 
+    dbAlreadyInitialized = !!(settingsDataSuccess && settingsData);
+
     // 2. Process Categories
     let catDataSuccess = false;
     let fetchedCats: Category[] = [];
@@ -1320,10 +1324,10 @@ async function initializeSupabaseData() {
     }
 
     if (mergedCats.length === 0) {
-      categories = [...DEFAULT_CATEGORIES];
+      categories = dbAlreadyInitialized ? [] : [...DEFAULT_CATEGORIES];
     } else {
       // Self-healing check: Ensure all DEFAULT_CATEGORIES are present in the Supabase database
-      if (catDataSuccess) {
+      if (catDataSuccess && !dbAlreadyInitialized) {
         const finalCatIds = new Set(mergedCats.map(c => c.id));
         for (const defCat of DEFAULT_CATEGORIES) {
           if (!finalCatIds.has(defCat.id) && !deletedCategoryIds.includes(defCat.id)) {
@@ -1362,10 +1366,10 @@ async function initializeSupabaseData() {
     }
 
     if (mergedItems.length === 0) {
-      menuItems = [...DEFAULT_MENU_ITEMS];
+      menuItems = dbAlreadyInitialized ? [] : [...DEFAULT_MENU_ITEMS];
     } else {
       // Self-healing check: Ensure all DEFAULT_MENU_ITEMS are present
-      if (menuDataSuccess) {
+      if (menuDataSuccess && !dbAlreadyInitialized) {
         const finalItemIds = new Set(mergedItems.map(item => item.id));
         for (const defItem of DEFAULT_MENU_ITEMS) {
           if (!finalItemIds.has(defItem.id) && !deletedMenuItemIds.includes(defItem.id)) {
@@ -1393,7 +1397,7 @@ async function initializeSupabaseData() {
         .map(order => mapSupabaseOrder(order));
     }
 
-    if (fetchedOrders.length === 0 && ordersDataSuccess && deletedOrderIds.length === 0) {
+    if (fetchedOrders.length === 0 && ordersDataSuccess && !dbAlreadyInitialized && deletedOrderIds.length === 0) {
       console.log("No orders found in Supabase. Seeding default orders...");
       for (const order of DEFAULT_ORDERS) {
         await syncOrderToSupabase(order).catch(e => console.error(e));
@@ -1404,7 +1408,7 @@ async function initializeSupabaseData() {
     } else {
       // Keep existing orders if query failed
       if (orders.length === 0) {
-        orders = [...DEFAULT_ORDERS];
+        orders = dbAlreadyInitialized ? [] : [...DEFAULT_ORDERS];
       }
     }
     saveLocalFile("orders.json", orders);
@@ -1440,7 +1444,7 @@ async function initializeSupabaseData() {
         }));
     }
 
-    if (fetchedReservations.length === 0 && resDataSuccess && deletedReservationIds.length === 0) {
+    if (fetchedReservations.length === 0 && resDataSuccess && !dbAlreadyInitialized && deletedReservationIds.length === 0) {
       console.log("No reservations found in Supabase. Seeding default reservations...");
       for (const resv of DEFAULT_RESERVATIONS) {
         await syncReservationToSupabase(resv).catch(e => console.error(e));
@@ -1450,7 +1454,7 @@ async function initializeSupabaseData() {
       reservations = fetchedReservations.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     } else {
       if (reservations.length === 0) {
-        reservations = [...DEFAULT_RESERVATIONS];
+        reservations = dbAlreadyInitialized ? [] : [...DEFAULT_RESERVATIONS];
       }
     }
     
@@ -1568,12 +1572,14 @@ async function ensureCategoriesLoaded() {
       }
 
       // Self-healing check: Ensure all DEFAULT_CATEGORIES are present
-      const finalIds = new Set(mergedCats.map(c => c.id));
-      for (const defCat of DEFAULT_CATEGORIES) {
-        if (!finalIds.has(defCat.id) && !deletedCategoryIds.includes(defCat.id)) {
-          console.log(`Default category ${defCat.id} missing in ensureCategoriesLoaded. Seeding...`);
-          await syncCategoryToSupabase(defCat).catch(e => console.error(e));
-          mergedCats.push(defCat);
+      if (!dbAlreadyInitialized) {
+        const finalIds = new Set(mergedCats.map(c => c.id));
+        for (const defCat of DEFAULT_CATEGORIES) {
+          if (!finalIds.has(defCat.id) && !deletedCategoryIds.includes(defCat.id)) {
+            console.log(`Default category ${defCat.id} missing in ensureCategoriesLoaded. Seeding...`);
+            await syncCategoryToSupabase(defCat).catch(e => console.error(e));
+            mergedCats.push(defCat);
+          }
         }
       }
 
