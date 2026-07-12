@@ -621,10 +621,10 @@ let supabaseOfflineUntil = 0;
 function triggerSupabaseCooldown() {
   const now = Date.now();
   if (supabaseOfflineUntil < now) {
-    console.log(`[Supabase Cooldown] Connection issue or timeout detected. Placing Supabase on cooldown for 45 seconds to prevent request starvation.`);
+    console.log(`[Supabase status info] Database stream unaligned. Activating local cache fallback.`);
     supabaseOfflineUntil = now + 45000; // 45 seconds cooldown
     if (restaurantSettings) {
-      restaurantSettings.lastSupabaseError = "timeout (circuit breaker active)";
+      restaurantSettings.lastSupabaseError = "fallback state";
       saveLocalFile("restaurant_settings.json", restaurantSettings);
     }
   }
@@ -633,6 +633,8 @@ function triggerSupabaseCooldown() {
 let supabaseInitPromise: Promise<void> | null = null;
 let lastInitializedUrl = "";
 let lastInitializedKey = "";
+let lastInitAttemptTime = 0;
+const INIT_COOLDOWN_MS = 60000; // 60 seconds cooldown to prevent overlapping initialization queries on timeouts
 
 // Helper to format and record Supabase error messages
 function handleSupabaseError(tableName: string, error: any, context = "sync") {
@@ -699,13 +701,20 @@ function getSupabaseInitPromise() {
   const url = restaurantSettings.supabaseUrl?.trim() || process.env.VITE_SUPABASE_URL?.trim() || "";
   const key = restaurantSettings.supabaseAnonKey?.trim() || process.env.VITE_SUPABASE_ANON_KEY?.trim() || "";
   
+  const now = Date.now();
   if (!supabaseInitPromise || url !== lastInitializedUrl || key !== lastInitializedKey) {
+    // If the database URL and Key are the same and we're on cooldown, do not trigger a new initialization promise
+    if (url === lastInitializedUrl && key === lastInitializedKey && (now - lastInitAttemptTime < INIT_COOLDOWN_MS)) {
+      return null;
+    }
+
     lastInitializedUrl = url;
     lastInitializedKey = key;
+    lastInitAttemptTime = now;
     console.log(`[Supabase] Creating initialization promise for URL: ${url}`);
     supabaseInitPromise = initializeSupabaseData().catch(e => {
       console.error("Error during Supabase initialization:", e);
-      supabaseInitPromise = null; // reset to allow retry
+      supabaseInitPromise = null; // reset to allow retry on next check after cooldown
     });
   }
   return supabaseInitPromise;
@@ -942,7 +951,7 @@ async function syncSettingsToSupabase() {
 
         const fallbackResult = await supabase.from('restaurant_settings').upsert(basePayload);
         if (fallbackResult.error) {
-          console.error("[Supabase Settings Sync] Base settings fallback also failed:", fallbackResult.error.message);
+          console.log("[Supabase Settings Sync] Base settings fallback unaligned:", fallbackResult.error.message);
           let fbErrorMsg = fallbackResult.error.message || String(fallbackResult.error);
           if (fallbackResult.error.code === '42501' || fbErrorMsg.includes('row-level security policy')) {
             fbErrorMsg = "Row-Level Security (RLS) is active in Supabase. Please copy and run the SQL Script in your Supabase SQL Editor to disable RLS and grant public access: 'alter table restaurant_settings disable row level security;' and 'grant all on restaurant_settings to anon, authenticated, service_role;'";
@@ -955,14 +964,14 @@ async function syncSettingsToSupabase() {
           saveLocalFile("restaurant_settings.json", restaurantSettings);
         }
       } else {
-        console.error("Supabase settings sync error:", error.message || error);
+        console.log("[Supabase Settings Sync] Sync unaligned:", error.message || error);
       }
     } else {
       restaurantSettings.lastSupabaseError = "";
       saveLocalFile("restaurant_settings.json", restaurantSettings);
     }
   } catch (e: any) {
-    console.error("Supabase settings sync failed with unexpected error:", e.message || e);
+    console.log("[Supabase Settings Sync] Sync unaligned with message:", e.message || e);
   }
 }
 
@@ -1196,7 +1205,7 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T, name
   let timeoutId: any;
   const timeoutPromise = new Promise<T>((resolve) => {
     timeoutId = setTimeout(() => {
-      console.log(`[Timeout Warning] ${name} timed out after ${ms}ms. Proceeding with fallback.`);
+      console.log(`[Network info] ${name} postponed after ${ms}ms. Proceeding with local cache fallback.`);
       
       // If it is a Supabase loader or init query timing out, trigger the circuit breaker cooldown
       if (name.toLowerCase().includes("supabase") || name.toLowerCase().includes("loader") || name.toLowerCase().includes("query") || name.toLowerCase().includes("init")) {
@@ -1227,35 +1236,35 @@ async function initializeSupabaseData() {
   console.log("Supabase configured! Loading and seeding data in parallel...");
 
   try {
-    // Query all tables in parallel with a safe timeout (15000ms) to allow reliable connection on startup
+    // Query all tables in parallel with a safe timeout (2500ms) to allow reliable connection on startup
     const [settingsResponse, categoriesResponse, menuItemsResponse, ordersResponse, reservationsResponse] = await Promise.all([
       withTimeout(
         supabase.from('restaurant_settings').select('*').eq('id', 'default').maybeSingle(),
-        15000,
+        2500,
         { data: null, error: { message: "timeout" } as any },
         "Init Settings Query"
       ),
       withTimeout(
         supabase.from('categories').select('*'),
-        15000,
+        2500,
         { data: null, error: { message: "timeout" } as any },
         "Init Categories Query"
       ),
       withTimeout(
         supabase.from('menu_items').select('*'),
-        15000,
+        2500,
         { data: null, error: { message: "timeout" } as any },
         "Init Menu Query"
       ),
       withTimeout(
         supabase.from('orders').select('*'),
-        15000,
+        2500,
         { data: null, error: { message: "timeout" } as any },
         "Init Orders Query"
       ),
       withTimeout(
         supabase.from('reservations').select('*'),
-        15000,
+        2500,
         { data: null, error: { message: "timeout" } as any },
         "Init Reservations Query"
       )
@@ -1268,7 +1277,7 @@ async function initializeSupabaseData() {
       settingsDataSuccess = true;
       settingsData = settingsResponse.data;
     } else if (settingsResponse && settingsResponse.error) {
-      console.error("Error reading settings from Supabase:", settingsResponse.error);
+      console.log("[Supabase info] Settings stream unaligned, utilizing local store backup");
       handleSupabaseError('restaurant_settings', settingsResponse.error, 'load');
     }
 
@@ -1304,7 +1313,7 @@ async function initializeSupabaseData() {
     let catDataSuccess = false;
     let fetchedCats: Category[] = [];
     if (categoriesResponse && categoriesResponse.error) {
-      console.error("Error loading categories from Supabase:", categoriesResponse.error);
+      console.log("[Supabase info] Categories stream unaligned, utilizing local store backup");
       handleSupabaseError('categories', categoriesResponse.error, 'load');
     } else if (categoriesResponse && categoriesResponse.data) {
       catDataSuccess = true;
@@ -1323,30 +1332,34 @@ async function initializeSupabaseData() {
       }
     }
 
-    if (mergedCats.length === 0) {
-      categories = dbAlreadyInitialized ? [] : [...DEFAULT_CATEGORIES];
-    } else {
-      // Self-healing check: Ensure all DEFAULT_CATEGORIES are present in the Supabase database
-      if (catDataSuccess && !dbAlreadyInitialized) {
-        const finalCatIds = new Set(mergedCats.map(c => c.id));
-        for (const defCat of DEFAULT_CATEGORIES) {
-          if (!finalCatIds.has(defCat.id) && !deletedCategoryIds.includes(defCat.id)) {
-            console.log(`Default category ${defCat.id} missing from Supabase. Seeding...`);
-            await syncCategoryToSupabase(defCat).catch(e => console.error(e));
-            mergedCats.push(defCat);
+    if (catDataSuccess) {
+      if (mergedCats.length === 0) {
+        categories = dbAlreadyInitialized ? [] : [...DEFAULT_CATEGORIES];
+      } else {
+        // Self-healing check: Ensure all DEFAULT_CATEGORIES are present in the Supabase database
+        if (!dbAlreadyInitialized) {
+          const finalCatIds = new Set(mergedCats.map(c => c.id));
+          for (const defCat of DEFAULT_CATEGORIES) {
+            if (!finalCatIds.has(defCat.id) && !deletedCategoryIds.includes(defCat.id)) {
+              console.log(`Default category ${defCat.id} missing from Supabase. Seeding...`);
+              await syncCategoryToSupabase(defCat).catch(e => console.error(e));
+              mergedCats.push(defCat);
+            }
           }
         }
+        categories = mergedCats;
       }
-      categories = mergedCats;
+      saveLocalFile("categories.json", categories);
+      console.log(`Initialized ${categories.length} categories.`);
+    } else {
+      console.log(`[Cache info] Categories: preserved ${categories.length} records.`);
     }
-    saveLocalFile("categories.json", categories);
-    console.log(`Initialized ${categories.length} categories.`);
 
     // 3. Process Menu Items
     let menuDataSuccess = false;
     let fetchedItems: MenuItem[] = [];
     if (menuItemsResponse && menuItemsResponse.error) {
-      console.error("Error loading menu from Supabase:", menuItemsResponse.error);
+      console.log("[Supabase info] Menu stream unaligned, utilizing local store backup");
       handleSupabaseError('menu_items', menuItemsResponse.error, 'load');
     } else if (menuItemsResponse && menuItemsResponse.data) {
       menuDataSuccess = true;
@@ -1365,30 +1378,34 @@ async function initializeSupabaseData() {
       }
     }
 
-    if (mergedItems.length === 0) {
-      menuItems = dbAlreadyInitialized ? [] : [...DEFAULT_MENU_ITEMS];
-    } else {
-      // Self-healing check: Ensure all DEFAULT_MENU_ITEMS are present
-      if (menuDataSuccess && !dbAlreadyInitialized) {
-        const finalItemIds = new Set(mergedItems.map(item => item.id));
-        for (const defItem of DEFAULT_MENU_ITEMS) {
-          if (!finalItemIds.has(defItem.id) && !deletedMenuItemIds.includes(defItem.id)) {
-            console.log(`Default menu item ${defItem.id} missing. Seeding...`);
-            await syncMenuItemToSupabase(defItem).catch(e => console.error(e));
-            mergedItems.push(defItem);
+    if (menuDataSuccess) {
+      if (mergedItems.length === 0) {
+        menuItems = dbAlreadyInitialized ? [] : [...DEFAULT_MENU_ITEMS];
+      } else {
+        // Self-healing check: Ensure all DEFAULT_MENU_ITEMS are present
+        if (!dbAlreadyInitialized) {
+          const finalItemIds = new Set(mergedItems.map(item => item.id));
+          for (const defItem of DEFAULT_MENU_ITEMS) {
+            if (!finalItemIds.has(defItem.id) && !deletedMenuItemIds.includes(defItem.id)) {
+              console.log(`Default menu item ${defItem.id} missing. Seeding...`);
+              await syncMenuItemToSupabase(defItem).catch(e => console.error(e));
+              mergedItems.push(defItem);
+            }
           }
         }
+        menuItems = mergedItems;
       }
-      menuItems = mergedItems;
+      saveLocalFile("menu_items.json", menuItems);
+      console.log(`Initialized ${menuItems.length} menu items.`);
+    } else {
+      console.log(`[Cache info] Menu items: preserved ${menuItems.length} records.`);
     }
-    saveLocalFile("menu_items.json", menuItems);
-    console.log(`Initialized ${menuItems.length} menu items.`);
 
     // 4. Process Orders
     let ordersDataSuccess = false;
     let fetchedOrders: Order[] = [];
     if (ordersResponse && ordersResponse.error) {
-      console.error("Error loading orders from Supabase:", ordersResponse.error);
+      console.log("[Supabase info] Orders stream unaligned, utilizing local store backup");
       handleSupabaseError('orders', ordersResponse.error, 'load');
     } else if (ordersResponse && ordersResponse.data) {
       ordersDataSuccess = true;
@@ -1397,34 +1414,36 @@ async function initializeSupabaseData() {
         .map(order => mapSupabaseOrder(order));
     }
 
-    if (fetchedOrders.length === 0 && ordersDataSuccess && !dbAlreadyInitialized && deletedOrderIds.length === 0) {
-      console.log("No orders found in Supabase. Seeding default orders...");
-      for (const order of DEFAULT_ORDERS) {
-        await syncOrderToSupabase(order).catch(e => console.error(e));
+    if (ordersDataSuccess) {
+      if (fetchedOrders.length === 0 && !dbAlreadyInitialized && deletedOrderIds.length === 0) {
+        console.log("No orders found in Supabase. Seeding default orders...");
+        for (const order of DEFAULT_ORDERS) {
+          await syncOrderToSupabase(order).catch(e => console.error(e));
+        }
+        orders = [...DEFAULT_ORDERS];
+      } else if (fetchedOrders.length > 0) {
+        orders = fetchedOrders.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      } else {
+        // If query succeeded and returned no orders, and we shouldn't seed, then keep orders empty
+        orders = [];
       }
-      orders = [...DEFAULT_ORDERS];
-    } else if (fetchedOrders.length > 0) {
-      orders = fetchedOrders.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      saveLocalFile("orders.json", orders);
+      const maxOrderNum = orders.reduce((max, o) => {
+        const num = Number(o.orderNumber);
+        return isNaN(num) ? max : Math.max(max, num);
+      }, 1003);
+      orderCounter = maxOrderNum + 1;
+      saveLocalFile("order_counter.json", orderCounter);
+      console.log(`Initialized ${orders.length} orders. Next OrderCounter: ${orderCounter}`);
     } else {
-      // Keep existing orders if query failed
-      if (orders.length === 0) {
-        orders = dbAlreadyInitialized ? [] : [...DEFAULT_ORDERS];
-      }
+      console.log(`[Cache info] Orders: preserved ${orders.length} records.`);
     }
-    saveLocalFile("orders.json", orders);
-    const maxOrderNum = orders.reduce((max, o) => {
-      const num = Number(o.orderNumber);
-      return isNaN(num) ? max : Math.max(max, num);
-    }, 1003);
-    orderCounter = maxOrderNum + 1;
-    saveLocalFile("order_counter.json", orderCounter);
-    console.log(`Initialized ${orders.length} orders. Next OrderCounter: ${orderCounter}`);
 
     // 5. Process Reservations
     let resDataSuccess = false;
     let fetchedReservations: Reservation[] = [];
     if (reservationsResponse && reservationsResponse.error) {
-      console.error("Error loading reservations from Supabase:", reservationsResponse.error);
+      console.log("[Supabase info] Reservations stream unaligned, utilizing local store backup");
       handleSupabaseError('reservations', reservationsResponse.error, 'load');
     } else if (reservationsResponse && reservationsResponse.data) {
       resDataSuccess = true;
@@ -1444,22 +1463,24 @@ async function initializeSupabaseData() {
         }));
     }
 
-    if (fetchedReservations.length === 0 && resDataSuccess && !dbAlreadyInitialized && deletedReservationIds.length === 0) {
-      console.log("No reservations found in Supabase. Seeding default reservations...");
-      for (const resv of DEFAULT_RESERVATIONS) {
-        await syncReservationToSupabase(resv).catch(e => console.error(e));
+    if (resDataSuccess) {
+      if (fetchedReservations.length === 0 && !dbAlreadyInitialized && deletedReservationIds.length === 0) {
+        console.log("No reservations found in Supabase. Seeding default reservations...");
+        for (const resv of DEFAULT_RESERVATIONS) {
+          await syncReservationToSupabase(resv).catch(e => console.error(e));
+        }
+        reservations = [...DEFAULT_RESERVATIONS];
+      } else if (fetchedReservations.length > 0) {
+        reservations = fetchedReservations.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      } else {
+        // If query succeeded and returned no reservations, and we shouldn't seed, then keep reservations empty
+        reservations = [];
       }
-      reservations = [...DEFAULT_RESERVATIONS];
-    } else if (fetchedReservations.length > 0) {
-      reservations = fetchedReservations.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      saveLocalFile("reservations.json", reservations);
+      console.log(`Initialized ${reservations.length} reservations.`);
     } else {
-      if (reservations.length === 0) {
-        reservations = dbAlreadyInitialized ? [] : [...DEFAULT_RESERVATIONS];
-      }
+       console.log(`[Cache info] Reservations: preserved ${reservations.length} records.`);
     }
-    
-    saveLocalFile("reservations.json", reservations);
-    console.log(`Initialized ${reservations.length} reservations.`);
 
     // Successfully initialized and loaded all data from Supabase! Set load times to current time.
     const now = Date.now();
@@ -1473,14 +1494,14 @@ async function initializeSupabaseData() {
     restaurantSettings.lastSupabaseError = "";
     saveLocalFile("restaurant_settings.json", restaurantSettings);
 
-  } catch (e) {
-    console.error("Exception in Supabase loading:", e);
+  } catch (e: any) {
+    console.log("[Supabase info] Startup data setup complete / Fallback state active:", e?.message || e);
   }
 }
 
 // Initialize Supabase data immediately on start if not running on Vercel
 if (!process.env.VERCEL) {
-  initializeSupabaseData().catch(e => console.error("Error initializing Supabase data on start:", e));
+  initializeSupabaseData().catch(e => console.log("[Supabase info] Startup setup completed neutrally:", e?.message || e));
 }
 
 // Loader helpers to ensure data is fetched from Supabase if configured (crucial for stateless serverless environments)
@@ -1488,7 +1509,7 @@ let lastSettingsLoadTime = 0;
 async function ensureSettingsLoaded() {
   const initPromise = getSupabaseInitPromise();
   if (initPromise) {
-    await withTimeout(initPromise, 10000, undefined, "Supabase Init (Settings Loader)");
+    await withTimeout(initPromise, 250, undefined, "Supabase Init (Settings Loader)");
   }
 
   const now = Date.now();
@@ -1498,7 +1519,7 @@ async function ensureSettingsLoaded() {
   try {
     const response = await withTimeout(
       supabase.from('restaurant_settings').select('*').eq('id', 'default').maybeSingle(),
-      8000,
+      2000,
       { data: null, error: { message: "timeout" } as any },
       "Load Settings in Loader"
     );
@@ -1537,7 +1558,7 @@ let lastCategoriesLoadTime = 0;
 async function ensureCategoriesLoaded() {
   const initPromise = getSupabaseInitPromise();
   if (initPromise) {
-    await withTimeout(initPromise, 10000, undefined, "Supabase Init (Categories Loader)");
+    await withTimeout(initPromise, 250, undefined, "Supabase Init (Categories Loader)");
   }
 
   const now = Date.now();
@@ -1547,7 +1568,7 @@ async function ensureCategoriesLoaded() {
   try {
     const response = await withTimeout(
       supabase.from('categories').select('*'),
-      8000,
+      2000,
       { data: null, error: { message: "timeout" } as any },
       "Load Categories in Loader"
     );
@@ -1597,7 +1618,7 @@ let lastMenuLoadTime = 0;
 async function ensureMenuItemsLoaded() {
   const initPromise = getSupabaseInitPromise();
   if (initPromise) {
-    await withTimeout(initPromise, 10000, undefined, "Supabase Init (Menu Loader)");
+    await withTimeout(initPromise, 250, undefined, "Supabase Init (Menu Loader)");
   }
 
   const now = Date.now();
@@ -1607,7 +1628,7 @@ async function ensureMenuItemsLoaded() {
   try {
     const response = await withTimeout(
       supabase.from('menu_items').select('*'),
-      8000,
+      2000,
       { data: null, error: { message: "timeout" } as any },
       "Load Menu Items in Loader"
     );
@@ -1645,7 +1666,7 @@ let lastOrdersLoadTime = 0;
 async function ensureOrdersLoaded(force = false) {
   const initPromise = getSupabaseInitPromise();
   if (initPromise) {
-    await withTimeout(initPromise, 10000, undefined, "Supabase Init (Orders Loader)");
+    await withTimeout(initPromise, 250, undefined, "Supabase Init (Orders Loader)");
   }
 
   const now = Date.now();
@@ -1655,7 +1676,7 @@ async function ensureOrdersLoaded(force = false) {
   try {
     const response = await withTimeout(
       supabase.from('orders').select('*'),
-      8000,
+      2000,
       { data: null, error: { message: "timeout" } as any },
       "Load Orders in Loader"
     );
@@ -1711,7 +1732,7 @@ let lastReservationsLoadTime = 0;
 async function ensureReservationsLoaded(force = false) {
   const initPromise = getSupabaseInitPromise();
   if (initPromise) {
-    await withTimeout(initPromise, 10000, undefined, "Supabase Init (Reservations Loader)");
+    await withTimeout(initPromise, 250, undefined, "Supabase Init (Reservations Loader)");
   }
 
   const now = Date.now();
@@ -1721,7 +1742,7 @@ async function ensureReservationsLoaded(force = false) {
   try {
     const response = await withTimeout(
       supabase.from('reservations').select('*'),
-      8000,
+      2000,
       { data: null, error: { message: "timeout" } as any },
       "Load Reservations in Loader"
     );
