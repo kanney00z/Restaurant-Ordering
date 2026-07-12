@@ -1326,7 +1326,7 @@ async function initializeSupabaseData() {
       if (catDataSuccess) {
         const finalCatIds = new Set(mergedCats.map(c => c.id));
         for (const defCat of DEFAULT_CATEGORIES) {
-          if (!finalCatIds.has(defCat.id)) {
+          if (!finalCatIds.has(defCat.id) && !deletedCategoryIds.includes(defCat.id)) {
             console.log(`Default category ${defCat.id} missing from Supabase. Seeding...`);
             await syncCategoryToSupabase(defCat).catch(e => console.error(e));
             mergedCats.push(defCat);
@@ -1368,7 +1368,7 @@ async function initializeSupabaseData() {
       if (menuDataSuccess) {
         const finalItemIds = new Set(mergedItems.map(item => item.id));
         for (const defItem of DEFAULT_MENU_ITEMS) {
-          if (!finalItemIds.has(defItem.id)) {
+          if (!finalItemIds.has(defItem.id) && !deletedMenuItemIds.includes(defItem.id)) {
             console.log(`Default menu item ${defItem.id} missing. Seeding...`);
             await syncMenuItemToSupabase(defItem).catch(e => console.error(e));
             mergedItems.push(defItem);
@@ -1393,7 +1393,7 @@ async function initializeSupabaseData() {
         .map(order => mapSupabaseOrder(order));
     }
 
-    if (fetchedOrders.length === 0 && ordersDataSuccess) {
+    if (fetchedOrders.length === 0 && ordersDataSuccess && deletedOrderIds.length === 0) {
       console.log("No orders found in Supabase. Seeding default orders...");
       for (const order of DEFAULT_ORDERS) {
         await syncOrderToSupabase(order).catch(e => console.error(e));
@@ -1440,7 +1440,7 @@ async function initializeSupabaseData() {
         }));
     }
 
-    if (fetchedReservations.length === 0 && resDataSuccess) {
+    if (fetchedReservations.length === 0 && resDataSuccess && deletedReservationIds.length === 0) {
       console.log("No reservations found in Supabase. Seeding default reservations...");
       for (const resv of DEFAULT_RESERVATIONS) {
         await syncReservationToSupabase(resv).catch(e => console.error(e));
@@ -1570,7 +1570,7 @@ async function ensureCategoriesLoaded() {
       // Self-healing check: Ensure all DEFAULT_CATEGORIES are present
       const finalIds = new Set(mergedCats.map(c => c.id));
       for (const defCat of DEFAULT_CATEGORIES) {
-        if (!finalIds.has(defCat.id)) {
+        if (!finalIds.has(defCat.id) && !deletedCategoryIds.includes(defCat.id)) {
           console.log(`Default category ${defCat.id} missing in ensureCategoriesLoaded. Seeding...`);
           await syncCategoryToSupabase(defCat).catch(e => console.error(e));
           mergedCats.push(defCat);
@@ -2357,19 +2357,30 @@ app.post("/api/orders", async (req, res) => {
 
 // DELETE /api/orders/:id (Delete Order)
 app.delete("/api/orders/:id", async (req, res) => {
-  await ensureOrdersLoaded();
   const { id } = req.params;
-  const index = orders.findIndex(o => o.id === id);
-  if (index === -1) {
-    // Attempt deletion from Supabase to be safe and idempotent, returning success instead of 404
-    await deleteOrderFromSupabase(id).catch(e => console.error(e));
-    broadcast("orders-updated");
-    return res.json({ success: true, deletedId: id, note: "Order not found in memory but delete attempted on Supabase" });
+  
+  // Track as deleted immediately to prevent any race conditions with incoming loads/polls
+  if (!deletedOrderIds.includes(id)) {
+    deletedOrderIds.push(id);
+    saveLocalFile("deleted_orders.json", deletedOrderIds);
   }
-  orders.splice(index, 1);
-  lastOrdersLoadTime = 0; // Force refresh
-  await deleteOrderFromSupabase(id).catch(e => console.error(e));
+  
+  // Remove from memory immediately
+  const index = orders.findIndex(o => o.id === id);
+  if (index !== -1) {
+    orders.splice(index, 1);
+    saveLocalFile("orders.json", orders);
+  }
+  
+  // Force subsequent loads to see the change
+  lastOrdersLoadTime = 0;
+  
+  // Delete from Supabase in the background (non-blocking for ultra-fast response)
+  deleteOrderFromSupabase(id).catch(e => console.error("[Supabase Delete Background Error]", e));
+  
+  // Broadcast update immediately to all connected clients
   broadcast("orders-updated");
+  
   res.json({ success: true, deletedId: id });
 });
 
@@ -2680,19 +2691,30 @@ app.post("/api/reservations/:id/status", async (req, res) => {
 
 // DELETE /api/reservations/:id - Delete a reservation permanently
 app.delete("/api/reservations/:id", async (req, res) => {
-  await ensureReservationsLoaded();
   const { id } = req.params;
-  const index = reservations.findIndex(r => r.id === id);
-  if (index === -1) {
-    // Attempt deletion from Supabase to be safe and idempotent, returning success instead of 404
-    await deleteReservationFromSupabase(id).catch(e => console.error(e));
-    broadcast("reservations-updated");
-    return res.json({ success: true, id, note: "Reservation not found in memory but delete attempted on Supabase" });
+  
+  // Track as deleted immediately to prevent any race conditions with incoming loads/polls
+  if (!deletedReservationIds.includes(id)) {
+    deletedReservationIds.push(id);
+    saveLocalFile("deleted_reservations.json", deletedReservationIds);
   }
-  reservations.splice(index, 1);
-  lastReservationsLoadTime = 0; // Force refresh
-  await deleteReservationFromSupabase(id).catch(e => console.error(e));
+  
+  // Remove from memory immediately
+  const index = reservations.findIndex(r => r.id === id);
+  if (index !== -1) {
+    reservations.splice(index, 1);
+    saveLocalFile("reservations.json", reservations);
+  }
+  
+  // Force subsequent loads to see the change
+  lastReservationsLoadTime = 0;
+  
+  // Delete from Supabase in the background (non-blocking for ultra-fast response)
+  deleteReservationFromSupabase(id).catch(e => console.error("[Supabase Delete Background Error]", e));
+  
+  // Broadcast update immediately to all connected clients
   broadcast("reservations-updated");
+  
   res.json({ success: true, id });
 });
 
