@@ -4053,17 +4053,35 @@ create table if not exists reservations (
   updated_at timestamp with time zone default now()
 );
 
+-- 5. Create categories table
+create table if not exists categories (
+  id text primary key,
+  name_th text,
+  name_en text,
+  emoji text,
+  updated_at timestamp with time zone default now()
+);
+
 -- Enable Realtime for these tables
 alter publication supabase_realtime add table orders;
 alter publication supabase_realtime add table reservations;
 alter publication supabase_realtime add table restaurant_settings;
 alter publication supabase_realtime add table menu_items;
+alter publication supabase_realtime add table categories;
 
 -- Disable Row Level Security (RLS) to allow public read/write/delete access via client Anon Key
 alter table restaurant_settings disable row level security;
 alter table menu_items disable row level security;
 alter table orders disable row level security;
-alter table reservations disable row level security;`}
+alter table reservations disable row level security;
+alter table categories disable row level security;
+
+-- Grant full public access permissions to prevent "permission denied" errors (code 42501)
+grant all on restaurant_settings to anon, authenticated, service_role;
+grant all on menu_items to anon, authenticated, service_role;
+grant all on orders to anon, authenticated, service_role;
+grant all on reservations to anon, authenticated, service_role;
+grant all on categories to anon, authenticated, service_role;`}
                         />
                         <button
                           type="button"
