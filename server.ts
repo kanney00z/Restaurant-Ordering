@@ -1485,6 +1485,36 @@ async function initializeSupabaseData() {
        console.log(`[Cache info] Reservations: preserved ${reservations.length} records.`);
     }
 
+    // If the database is brand new (not yet initialized), auto-sync all existing local data into it so the user doesn't lose anything
+    if (!dbAlreadyInitialized) {
+      console.log("[Supabase Auto-Sync] Detected brand new database connection. Auto-uploading all existing local data to Supabase...");
+      
+      // 1. Sync Settings
+      await syncSettingsToSupabase().catch(e => console.error("Error auto-syncing settings:", e));
+      
+      // 2. Sync Categories
+      for (const cat of categories) {
+        await syncCategoryToSupabase(cat).catch(e => console.error("Error auto-syncing category:", e));
+      }
+      
+      // 3. Sync Menu Items
+      for (const item of menuItems) {
+        await syncMenuItemToSupabase(item).catch(e => console.error("Error auto-syncing menu item:", e));
+      }
+      
+      // 4. Sync Orders
+      for (const order of orders) {
+        await syncOrderToSupabase(order).catch(e => console.error("Error auto-syncing order:", e));
+      }
+      
+      // 5. Sync Reservations
+      for (const resv of reservations) {
+        await syncReservationToSupabase(resv).catch(e => console.error("Error auto-syncing reservation:", e));
+      }
+      
+      console.log("[Supabase Auto-Sync] Completed auto-upload of local data to Supabase successfully.");
+    }
+
     // Successfully initialized and loaded all data from Supabase! Set load times to current time.
     const now = Date.now();
     lastSettingsLoadTime = now;
