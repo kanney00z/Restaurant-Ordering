@@ -200,10 +200,35 @@ export default function App() {
       headers.set('x-supabase-key', key);
     }
     
-    return window.fetch(input, {
-      ...init,
-      headers
-    });
+    const method = (init?.method || 'GET').toUpperCase();
+    
+    if (method === 'GET') {
+      let lastErr: any;
+      const maxRetries = 3;
+      let delay = 500;
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          const response = await window.fetch(input, {
+            ...init,
+            headers
+          });
+          return response;
+        } catch (err) {
+          lastErr = err;
+          if (attempt < maxRetries) {
+            console.log(`[Fetch Retry] GET to ${String(input)} failed (attempt ${attempt}/${maxRetries}). Retrying in ${delay}ms...`, err);
+            await new Promise(resolve => setTimeout(resolve, delay));
+            delay *= 2;
+          }
+        }
+      }
+      throw lastErr;
+    } else {
+      return window.fetch(input, {
+        ...init,
+        headers
+      });
+    }
   };
 
   // 5 Feature Upgrades states

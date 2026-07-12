@@ -614,6 +614,19 @@ const localReservationUpdates = new Map<string, { timestamp: number, reservation
 let cachedSupabaseClient: any = null;
 let lastSupabaseUrl = "";
 let lastSupabaseKey = "";
+let supabaseOfflineUntil = 0;
+
+function triggerSupabaseCooldown() {
+  const now = Date.now();
+  if (supabaseOfflineUntil < now) {
+    console.log(`[Supabase Cooldown] Connection issue or timeout detected. Placing Supabase on cooldown for 45 seconds to prevent request starvation.`);
+    supabaseOfflineUntil = now + 45000; // 45 seconds cooldown
+    if (restaurantSettings) {
+      restaurantSettings.lastSupabaseError = "timeout (circuit breaker active)";
+      saveLocalFile("restaurant_settings.json", restaurantSettings);
+    }
+  }
+}
 
 let supabaseInitPromise: Promise<void> | null = null;
 let lastInitializedUrl = "";
@@ -622,9 +635,14 @@ let lastInitializedKey = "";
 // Helper to format and record Supabase error messages
 function handleSupabaseError(tableName: string, error: any, context = "sync") {
   if (!error) return;
-  // Use a completely harmless status log to avoid triggering standard error log parsers.
+  // Use a completely harmless status log to avoid triggering standard error log parses.
   console.log(`[Supabase status info] Table: ${tableName}, operation: ${context}, response code: ${error.code || 'N/A'}`);
   let errorMsg = error.message || String(error);
+
+  if (errorMsg.includes("timeout") || errorMsg.includes("FetchError") || errorMsg.includes("failed to fetch") || error.code === 'FetchError') {
+    triggerSupabaseCooldown();
+  }
+
   if (error.code === '42501' || errorMsg.includes('row-level security policy') || errorMsg.includes('violates row-level security policy')) {
     errorMsg = `Row-Level Security (RLS) is active in Supabase. Please copy and run the SQL Script in your Supabase SQL Editor to disable RLS and grant public access:\n\n` +
                `alter table ${tableName} disable row level security;\n` +
@@ -638,6 +656,9 @@ function handleSupabaseError(tableName: string, error: any, context = "sync") {
 
 // Lazy-initialized Supabase Client
 function getSupabase() {
+  if (Date.now() < supabaseOfflineUntil) {
+    return null;
+  }
   const url = restaurantSettings.supabaseUrl?.trim() || process.env.VITE_SUPABASE_URL?.trim();
   const key = restaurantSettings.supabaseAnonKey?.trim() || process.env.VITE_SUPABASE_ANON_KEY?.trim();
   if (url && typeof url === "string" && url.startsWith("http") && url !== "YOUR_SUPABASE_URL_HERE" && key && key !== "YOUR_SUPABASE_ANON_KEY_HERE") {
@@ -1174,6 +1195,12 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T, name
   const timeoutPromise = new Promise<T>((resolve) => {
     timeoutId = setTimeout(() => {
       console.log(`[Timeout Warning] ${name} timed out after ${ms}ms. Proceeding with fallback.`);
+      
+      // If it is a Supabase loader or init query timing out, trigger the circuit breaker cooldown
+      if (name.toLowerCase().includes("supabase") || name.toLowerCase().includes("loader") || name.toLowerCase().includes("query") || name.toLowerCase().includes("init")) {
+        triggerSupabaseCooldown();
+      }
+      
       resolve(fallback);
     }, ms);
   });
@@ -1198,35 +1225,35 @@ async function initializeSupabaseData() {
   console.log("Supabase configured! Loading and seeding data in parallel...");
 
   try {
-    // Query all tables in parallel with a low timeout (2000ms) to prevent cascading timeouts from locking the server
+    // Query all tables in parallel with a safe timeout (15000ms) to allow reliable connection on startup
     const [settingsResponse, categoriesResponse, menuItemsResponse, ordersResponse, reservationsResponse] = await Promise.all([
       withTimeout(
         supabase.from('restaurant_settings').select('*').eq('id', 'default').maybeSingle(),
-        2000,
+        15000,
         { data: null, error: { message: "timeout" } as any },
         "Init Settings Query"
       ),
       withTimeout(
         supabase.from('categories').select('*'),
-        2000,
+        15000,
         { data: null, error: { message: "timeout" } as any },
         "Init Categories Query"
       ),
       withTimeout(
         supabase.from('menu_items').select('*'),
-        2000,
+        15000,
         { data: null, error: { message: "timeout" } as any },
         "Init Menu Query"
       ),
       withTimeout(
         supabase.from('orders').select('*'),
-        2000,
+        15000,
         { data: null, error: { message: "timeout" } as any },
         "Init Orders Query"
       ),
       withTimeout(
         supabase.from('reservations').select('*'),
-        2000,
+        15000,
         { data: null, error: { message: "timeout" } as any },
         "Init Reservations Query"
       )
@@ -1457,7 +1484,7 @@ let lastSettingsLoadTime = 0;
 async function ensureSettingsLoaded() {
   const initPromise = getSupabaseInitPromise();
   if (initPromise) {
-    await withTimeout(initPromise, 1500, undefined, "Supabase Init (Settings Loader)");
+    await withTimeout(initPromise, 10000, undefined, "Supabase Init (Settings Loader)");
   }
 
   const now = Date.now();
@@ -1467,7 +1494,7 @@ async function ensureSettingsLoaded() {
   try {
     const response = await withTimeout(
       supabase.from('restaurant_settings').select('*').eq('id', 'default').maybeSingle(),
-      1500,
+      8000,
       { data: null, error: { message: "timeout" } as any },
       "Load Settings in Loader"
     );
@@ -1506,7 +1533,7 @@ let lastCategoriesLoadTime = 0;
 async function ensureCategoriesLoaded() {
   const initPromise = getSupabaseInitPromise();
   if (initPromise) {
-    await withTimeout(initPromise, 1500, undefined, "Supabase Init (Categories Loader)");
+    await withTimeout(initPromise, 10000, undefined, "Supabase Init (Categories Loader)");
   }
 
   const now = Date.now();
@@ -1516,7 +1543,7 @@ async function ensureCategoriesLoaded() {
   try {
     const response = await withTimeout(
       supabase.from('categories').select('*'),
-      1500,
+      8000,
       { data: null, error: { message: "timeout" } as any },
       "Load Categories in Loader"
     );
@@ -1564,7 +1591,7 @@ let lastMenuLoadTime = 0;
 async function ensureMenuItemsLoaded() {
   const initPromise = getSupabaseInitPromise();
   if (initPromise) {
-    await withTimeout(initPromise, 1500, undefined, "Supabase Init (Menu Loader)");
+    await withTimeout(initPromise, 10000, undefined, "Supabase Init (Menu Loader)");
   }
 
   const now = Date.now();
@@ -1574,7 +1601,7 @@ async function ensureMenuItemsLoaded() {
   try {
     const response = await withTimeout(
       supabase.from('menu_items').select('*'),
-      1500,
+      8000,
       { data: null, error: { message: "timeout" } as any },
       "Load Menu Items in Loader"
     );
@@ -1612,7 +1639,7 @@ let lastOrdersLoadTime = 0;
 async function ensureOrdersLoaded(force = false) {
   const initPromise = getSupabaseInitPromise();
   if (initPromise) {
-    await withTimeout(initPromise, 1500, undefined, "Supabase Init (Orders Loader)");
+    await withTimeout(initPromise, 10000, undefined, "Supabase Init (Orders Loader)");
   }
 
   const now = Date.now();
@@ -1622,7 +1649,7 @@ async function ensureOrdersLoaded(force = false) {
   try {
     const response = await withTimeout(
       supabase.from('orders').select('*'),
-      1500,
+      8000,
       { data: null, error: { message: "timeout" } as any },
       "Load Orders in Loader"
     );
@@ -1678,7 +1705,7 @@ let lastReservationsLoadTime = 0;
 async function ensureReservationsLoaded(force = false) {
   const initPromise = getSupabaseInitPromise();
   if (initPromise) {
-    await withTimeout(initPromise, 1500, undefined, "Supabase Init (Reservations Loader)");
+    await withTimeout(initPromise, 10000, undefined, "Supabase Init (Reservations Loader)");
   }
 
   const now = Date.now();
@@ -1688,7 +1715,7 @@ async function ensureReservationsLoaded(force = false) {
   try {
     const response = await withTimeout(
       supabase.from('reservations').select('*'),
-      1500,
+      8000,
       { data: null, error: { message: "timeout" } as any },
       "Load Reservations in Loader"
     );

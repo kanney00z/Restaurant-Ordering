@@ -1,5 +1,11 @@
 [
   {
+    "id": "dessert",
+    "nameTh": "ของหวาน",
+    "nameEn": "Desserts",
+    "emoji": "🍨"
+  },
+  {
     "id": "appetizer",
     "nameTh": "อาหารเรียกน้ำย่อย",
     "nameEn": "Appetizers",
@@ -12,15 +18,15 @@
     "emoji": "🥩"
   },
   {
-    "id": "dessert",
-    "nameTh": "ของหวาน",
-    "nameEn": "Desserts",
-    "emoji": "🍨"
-  },
-  {
     "id": "beverage",
     "nameTh": "เครื่องดื่ม",
     "nameEn": "Beverages",
     "emoji": "🍹"
+  },
+  {
+    "id": "other",
+    "nameTh": "อื่นๆ",
+    "nameEn": "Other",
+    "emoji": "📦"
   }
 ]
