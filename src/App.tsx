@@ -192,6 +192,14 @@ export default function App() {
 
   // Scoped fetch wrapper for API requests that dynamically injects Supabase headers for stateless serverless environments
   const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    let finalInput = input;
+    if (typeof input === 'string' && input.startsWith('/api')) {
+      const hostname = window.location.hostname;
+      if (hostname.includes('vercel.app') || hostname === 'localhost' || hostname === '127.0.0.1') {
+        finalInput = 'https://ais-pre-dpbgtnjbao4uqwlj2qxcil-361727948318.asia-southeast1.run.app' + input;
+      }
+    }
+
     const url = localStorage.getItem('aura_supabase_url') || '';
     const key = localStorage.getItem('aura_supabase_anon_key') || '';
     
@@ -207,7 +215,7 @@ export default function App() {
     
     const processResponse = (response: Response): Response => {
       const contentType = response.headers.get('content-type');
-      const inputStr = typeof input === 'string' ? input : (input && 'url' in input ? (input as any).url : String(input));
+      const inputStr = typeof finalInput === 'string' ? finalInput : (finalInput && 'url' in finalInput ? (finalInput as any).url : String(finalInput));
       const isApiRoute = inputStr.includes('/api/');
       const isHtml = contentType && (contentType.includes('text/html') || contentType.includes('text/plain')) && !contentType.includes('application/json');
       
@@ -235,7 +243,7 @@ export default function App() {
       let delay = 500;
       for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
-          const response = await window.fetch(input, {
+          const response = await window.fetch(finalInput, {
             ...init,
             headers
           });
@@ -243,7 +251,7 @@ export default function App() {
         } catch (err) {
           lastErr = err;
           if (attempt < maxRetries) {
-            console.log(`[Fetch Retry] GET to ${String(input)} failed (attempt ${attempt}/${maxRetries}). Retrying in ${delay}ms...`, err);
+            console.log(`[Fetch Retry] GET to ${String(finalInput)} failed (attempt ${attempt}/${maxRetries}). Retrying in ${delay}ms...`, err);
             await new Promise(resolve => setTimeout(resolve, delay));
             delay *= 2;
           }
@@ -251,7 +259,7 @@ export default function App() {
       }
       throw lastErr;
     } else {
-      const response = await window.fetch(input, {
+      const response = await window.fetch(finalInput, {
         ...init,
         headers
       });
