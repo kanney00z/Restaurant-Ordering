@@ -190,15 +190,11 @@ export default function App() {
   const [syncSuccessMsg, setSyncSuccessMsg] = useState('');
   const [syncErrorMsg, setSyncErrorMsg] = useState('');
 
-  // Scoped fetch wrapper for API requests that dynamically injects Supabase headers for stateless serverless environments
+    // Scoped fetch wrapper for API requests that dynamically injects Supabase headers for stateless serverless environments
   const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     let finalInput = input;
-    if (typeof input === 'string' && input.startsWith('/api')) {
-      const hostname = window.location.hostname;
-      if (hostname.includes('vercel.app')) {
-        finalInput = 'https://ais-pre-dpbgtnjbao4uqwlj2qxcil-361727948318.asia-southeast1.run.app' + input;
-      }
-    }
+    // On Vercel, requests to /api/ will go directly to Vercel's own Serverless functions under the same domain, which completely eliminates CORS!
+    // Therefore, we do not prepend the Cloud Run URL here.
 
     const url = localStorage.getItem('aura_supabase_url') || '';
     const key = localStorage.getItem('aura_supabase_anon_key') || '';
