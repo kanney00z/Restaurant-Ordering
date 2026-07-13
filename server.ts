@@ -56,6 +56,104 @@ function broadcast(type: string, payload?: any) {
 }
 
 // Middleware
+// Domain block middleware as requested by user
+app.use((req, res, next) => {
+  const host = req.get("host") || "";
+  const referer = req.headers.referer || "";
+  const origin = req.headers.origin || "";
+
+  const isBlockedDomain = host.includes("ais-pre-dpbgtnjbao4uqwlj2qxcil-361727948318.asia-southeast1.run.app") ||
+                          referer.includes("ais-pre-dpbgtnjbao4uqwlj2qxcil-361727948318.asia-southeast1.run.app") ||
+                          origin.includes("ais-pre-dpbgtnjbao4uqwlj2qxcil-361727948318.asia-southeast1.run.app");
+
+  if (isBlockedDomain) {
+    if (req.path.startsWith("/api/")) {
+      return res.status(403).json({
+        error: "Forbidden",
+        message: "ระบบนี้ปิดการทำงานบนโดเมนนี้แล้ว กรุณาใช้งานผ่าน https://restaurant-ordering-pied-psi.vercel.app"
+      });
+    }
+
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    return res.status(403).send(`
+      <!DOCTYPE html>
+      <html lang="th">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>ระบบย้ายโดเมนแล้ว | Domain Relocated</title>
+        <style>
+          body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background-color: #0f172a;
+            color: #f1f5f9;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            padding: 20px;
+            box-sizing: border-box;
+          }
+          .card {
+            background-color: #1e293b;
+            border: 1px solid #334155;
+            padding: 40px;
+            border-radius: 16px;
+            max-width: 500px;
+            width: 100%;
+            text-align: center;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3), 0 8px 10px -6px rgba(0, 0, 0, 0.3);
+          }
+          .icon {
+            font-size: 48px;
+            margin-bottom: 20px;
+          }
+          h1 {
+            font-size: 24px;
+            margin-bottom: 12px;
+            color: #f8fafc;
+            font-weight: 600;
+          }
+          p {
+            font-size: 16px;
+            color: #94a3b8;
+            line-height: 1.6;
+            margin-bottom: 30px;
+          }
+          .btn {
+            display: inline-block;
+            background-color: #3b82f6;
+            color: white;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-weight: 500;
+            transition: background-color 0.2s;
+          }
+          .btn:hover {
+            background-color: #2563eb;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <div class="icon">🚫</div>
+          <h1>ระบบนี้ปิดให้บริการบนโดเมนนี้แล้ว</h1>
+          <p>
+            เราได้ปิดการทำงานของเว็บไซต์บนลิงก์นี้แล้ว<br>
+            กรุณาเข้าใช้งานระบบสั่งอาหารและจัดการหลังบ้านผ่านเว็บไซต์หลักที่:
+          </p>
+          <a href="https://restaurant-ordering-pied-psi.vercel.app" class="btn">ไปที่หน้าเว็บหลัก</a>
+        </div>
+      </body>
+      </html>
+    `);
+  }
+
+  next();
+});
+
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
