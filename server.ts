@@ -64,24 +64,28 @@ app.use((req, res, next) => {
   const origin = req.headers.origin || "";
   const referer = req.headers.referer || "";
 
-  // If the request originates from the blocked pre-render shared URL, block it.
-  if (
-    (origin && origin.includes("ais-pre-dpbgtnjbao4uqwlj2qxcil-361727948318.asia-southeast1.run.app")) ||
-    (referer && referer.includes("ais-pre-dpbgtnjbao4uqwlj2qxcil-361727948318.asia-southeast1.run.app"))
-  ) {
-    return res.status(403).send("Forbidden: This API domain is deactivated on this host. Please use restaurant-ordering-pied-psi.vercel.app.");
-  }
-
-  // Set CORS headers
+  // Set CORS headers FIRST to prevent browser CORS block issues!
   const allowedOrigin = origin || "https://restaurant-ordering-pied-psi.vercel.app";
   res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, x-supabase-url, x-supabase-key, x-requested-with");
   res.setHeader("Access-Control-Allow-Credentials", "true");
   res.setHeader("Access-Control-Max-Age", "86400"); // 24 hours cache
+
   if (req.method === "OPTIONS") {
     return res.sendStatus(200);
   }
+
+  // Domain access control for API routes
+  if (req.path.startsWith("/api/")) {
+    const isBlockedOrigin = !!(origin && origin.includes("ais-pre-dpbgtnjbao4uqwlj2qxcil-361727948318.asia-southeast1.run.app"));
+    const isBlockedReferer = !!(referer && referer.includes("ais-pre-dpbgtnjbao4uqwlj2qxcil-361727948318.asia-southeast1.run.app"));
+
+    if (isBlockedOrigin || isBlockedReferer) {
+      return res.status(403).send("Forbidden: This API is deactivated for this domain. Please use restaurant-ordering-pied-psi.vercel.app.");
+    }
+  }
+
   next();
 });
 
