@@ -965,11 +965,11 @@ function mapSupabaseCategory(c: any): Category {
 }
 
 function mapSupabaseOrder(order: any): Order {
-  let orderNumber = order.order_number || order.id.replace("ORD-", "");
-  let dineInType: 'dine-in' | 'delivery' = order.dine_in_type || "dine-in";
-  let tableNumber = order.table_number || "";
+  let orderNumber = order.order_number || order.orderNumber || order.id.replace("ORD-", "");
+  let dineInType: 'dine-in' | 'delivery' = order.dine_in_type || order.dineInType || "dine-in";
+  let tableNumber = order.table_number || order.tableNumber || "";
   let phone = order.phone || "";
-  let paymentSlip = order.payment_slip || "";
+  let paymentSlip = order.payment_slip || order.paymentSlip || "";
 
   if (order.note) {
     try {
@@ -984,8 +984,8 @@ function mapSupabaseOrder(order: any): Order {
     }
   }
 
-  const deliveryAddress = order.delivery_address || order.address || "";
-  const totalAmount = Number(order.total_amount !== undefined ? order.total_amount : (order.total || 0));
+  const deliveryAddress = order.delivery_address || order.deliveryAddress || order.address || "";
+  const totalAmount = Number(order.total_amount !== undefined ? order.total_amount : (order.totalAmount !== undefined ? order.totalAmount : (order.total || 0)));
   const timestamp = order.timestamp || order.date || new Date().toISOString();
 
   let items = order.items;
@@ -1003,12 +1003,12 @@ function mapSupabaseOrder(order: any): Order {
   return {
     id: order.id,
     orderNumber,
-    customerName: order.customer_name || "",
+    customerName: order.customer_name || order.customerName || "",
     dineInType,
     tableNumber,
     deliveryAddress,
     phone,
-    paymentMethod: order.payment_method || "cash",
+    paymentMethod: order.payment_method || order.paymentMethod || "cash",
     paymentSlip,
     items,
     totalAmount,
@@ -1836,7 +1836,18 @@ async function ensureOrdersLoaded(force = false) {
         .filter(order => !deletedOrderIds.includes(order.id))
         .map(order => mapSupabaseOrder(order));
       
-      const mergedOrders = fetchedOrders.map(fetched => {
+      // Merge with local orders backup to prevent data loss if Supabase sync is failing
+      const localOrders = loadLocalFile("orders.json", []).map((o: any) => mapSupabaseOrder(o));
+      const mergedOrders = [...fetchedOrders];
+      const fetchedIds = new Set(fetchedOrders.map(o => o.id));
+
+      for (const localOrder of localOrders) {
+        if (!fetchedIds.has(localOrder.id) && !deletedOrderIds.includes(localOrder.id)) {
+          mergedOrders.push(localOrder);
+        }
+      }
+
+      const finalOrders = mergedOrders.map(fetched => {
         const recent = localOrderUpdates.get(fetched.id);
         if (recent && (Date.now() - recent.timestamp < 15000)) {
           // If we had a local update in the last 15 seconds, prefer the local version
@@ -1845,17 +1856,17 @@ async function ensureOrdersLoaded(force = false) {
         return fetched;
       });
 
-      // Also include any extremely recent local orders that are not in the fetched list at all yet
+      // Also include any extremely recent local orders that are not in the list at all yet
       for (const [id, info] of localOrderUpdates.entries()) {
         if (Date.now() - info.timestamp < 15000) {
-          if (!mergedOrders.some(o => o.id === id) && !deletedOrderIds.includes(id)) {
-            mergedOrders.push(info.order);
+          if (!finalOrders.some(o => o.id === id) && !deletedOrderIds.includes(id)) {
+            finalOrders.push(info.order);
           }
         }
       }
 
       // Keep orders sorted by timestamp descending so newest is always first
-      orders = mergedOrders.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      orders = finalOrders.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
       
       const maxOrderNum = orders.reduce((max, o) => {
         const num = Number(o.orderNumber);
@@ -1913,7 +1924,30 @@ async function ensureReservationsLoaded(force = false) {
           timestamp: resv.timestamp
         }));
 
-      const mergedReservations = fetchedReservations.map(fetched => {
+      // Merge with local reservations backup to prevent data loss if Supabase sync is failing
+      const localResvs = loadLocalFile("reservations.json", []).map((r: any) => ({
+        id: r.id,
+        customerName: r.customerName || "",
+        phone: r.phone || "",
+        date: r.date || "",
+        time: r.time || "",
+        partySize: Number(r.partySize || 1),
+        tablePreference: r.tablePreference || "",
+        specialRequest: r.specialRequest || "",
+        status: r.status || "pending",
+        timestamp: r.timestamp || new Date().toISOString()
+      }));
+
+      const mergedReservations = [...fetchedReservations];
+      const fetchedIds = new Set(fetchedReservations.map(r => r.id));
+
+      for (const localResv of localResvs) {
+        if (!fetchedIds.has(localResv.id) && !deletedReservationIds.includes(localResv.id)) {
+          mergedReservations.push(localResv);
+        }
+      }
+
+      const finalReservations = mergedReservations.map(fetched => {
         const recent = localReservationUpdates.get(fetched.id);
         if (recent && (Date.now() - recent.timestamp < 15000)) {
           return recent.reservation;
@@ -1923,14 +1957,14 @@ async function ensureReservationsLoaded(force = false) {
 
       for (const [id, info] of localReservationUpdates.entries()) {
         if (Date.now() - info.timestamp < 15000) {
-          if (!mergedReservations.some(r => r.id === id) && !deletedReservationIds.includes(id)) {
-            mergedReservations.push(info.reservation);
+          if (!finalReservations.some(r => r.id === id) && !deletedReservationIds.includes(id)) {
+            finalReservations.push(info.reservation);
           }
         }
       }
 
       // Keep reservations sorted by date/time or timestamp descending
-      reservations = mergedReservations.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      reservations = finalReservations.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
       
       // Save local backup file
       saveLocalFile("reservations.json", reservations);
